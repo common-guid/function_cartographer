@@ -29,3 +29,4 @@
 6. whenever possible Dockerize the application and use docker compose. 
 7. Ignore the `worktrees` directory and any files within it. Do not read or modify any files within this directory.
 8. See the sample_js-files directory for sample files to use for testing.
+9. All code must be written in the `v2` directory
