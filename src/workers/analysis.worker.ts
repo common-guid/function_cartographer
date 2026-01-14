@@ -1,44 +1,253 @@
-import * as Comlink from 'comlink';
-import * as acorn from 'acorn';
+import * as Comlink from 'comlink'
+import * as acorn from 'acorn'
+import type {
+  EdgePayload,
+  GraphPayload,
+  NodePayload,
+  WorkerResult,
+} from '../types/graph'
 
-export class AnalysisWorker {
-    async processDirectory(handle: FileSystemDirectoryHandle) {
-        console.log("Worker received directory handle:", handle.name);
+type FileEntry = { handle: FileSystemFileHandle; path: string }
 
-        // Simulate processing time
-        await new Promise(resolve => setTimeout(resolve, 1000));
+const MAX_PARSE_BYTES = 5_000_000 // safety cap; warn if exceeded
 
-        // Dummy graph data
-        const nodes = [
-            { key: "root", attributes: { x: 0, y: 0, size: 20, label: "Root", color: "#FA4F40" } },
-            { key: "modA", attributes: { x: 15, y: 5, size: 10, label: "Module A", color: "#40FAFA" } },
-            { key: "modB", attributes: { x: 15, y: -5, size: 10, label: "Module B", color: "#40FAFA" } },
-            { key: "util", attributes: { x: 30, y: 0, size: 5, label: "Utils", color: "#808080" } }
-        ];
-        const edges = [
-            { source: "root", target: "modA" },
-            { source: "root", target: "modB" },
-            { source: "modA", target: "util" },
-            { source: "modB", target: "util" }
-        ];
-
-        return {
-            success: true,
-            data: { nodes, edges }
-        };
-    }
-
-    async parseCode(code: string) {
-        try {
-            const ast = acorn.parse(code, {
-                ecmaVersion: 2020,
-                sourceType: 'module'
-            });
-            return { success: true, astType: ast.type };
-        } catch (error) {
-            return { success: false, error: String(error) };
-        }
-    }
+function moduleIdFromPath(path: string) {
+  return path.replace(/\.js$/i, '')
 }
 
-Comlink.expose(new AnalysisWorker());
+function stringifyCallee(node: any): string | null {
+  switch (node?.type) {
+    case 'Identifier':
+      return node.name || null
+    case 'Literal':
+      return String(node.value)
+    case 'MemberExpression': {
+      const object = stringifyCallee(node.object)
+      const property = node.computed
+        ? stringifyCallee(node.property)
+        : node.property?.name
+      if (object && property) return `${object}.${property}`
+      if (object) return object
+      return property ?? null
+    }
+    default:
+      return null
+  }
+}
+
+async function collectJsFiles(
+  dir: FileSystemDirectoryHandle,
+  prefix = '',
+): Promise<FileEntry[]> {
+  const results: FileEntry[] = []
+  for await (const entry of dir.values()) {
+    const path = `${prefix}${entry.name}`
+    if (entry.kind === 'file' && entry.name.endsWith('.js')) {
+      results.push({ handle: entry, path })
+    } else if (entry.kind === 'directory') {
+      const nested = await collectJsFiles(entry, `${path}/`)
+      results.push(...nested)
+    }
+  }
+  return results
+}
+
+export class AnalysisWorker {
+  async processDirectory(handle: FileSystemDirectoryHandle): Promise<WorkerResult> {
+    const warnings: string[] = []
+    try {
+      const files = await collectJsFiles(handle)
+      if (!files.length) {
+        warnings.push('No .js bundles discovered in the selected directory')
+        return { success: false, error: 'No JS bundles found', warnings }
+      }
+
+      const nodeMap = new Map<string, NodePayload>()
+      const edgeSet = new Set<string>()
+      const edges: EdgePayload[] = []
+
+      for (const fileEntry of files) {
+        const file = await fileEntry.handle.getFile()
+        const fileNodeId = `file:${fileEntry.path}`
+        nodeMap.set(fileNodeId, {
+          id: fileNodeId,
+          label: fileEntry.path,
+          moduleId: moduleIdFromPath(fileEntry.path),
+          file: fileEntry.path,
+          size: file.size,
+          confidence: 'medium',
+        })
+
+        if (file.size > MAX_PARSE_BYTES) {
+          warnings.push(
+            `${fileEntry.path} exceeds ${MAX_PARSE_BYTES} bytes; analysis may be partial`,
+          )
+        }
+
+        const code = await file.text()
+        const parseResult = this.safeParse(code)
+        if (!parseResult.ok) {
+          warnings.push(`${fileEntry.path}: parse failed (${parseResult.reason})`)
+          continue
+        }
+
+        let fnCounter = 0
+        const ctxStack: string[] = []
+
+        const addNode = (id: string, label: string, meta: Partial<NodePayload>) => {
+          if (!nodeMap.has(id)) {
+            nodeMap.set(id, {
+              id,
+              label,
+              moduleId: moduleIdFromPath(fileEntry.path),
+              file: fileEntry.path,
+              confidence: 'high',
+              ...meta,
+            })
+          }
+        }
+
+        const addEdge = (source: string, target: string, weak = false) => {
+          const key = `${source}->${target}${weak ? ':w' : ''}`
+          if (edgeSet.has(key)) return
+          edgeSet.add(key)
+          edges.push({ source, target, weak, confidence: weak ? 'low' : 'medium' })
+        }
+
+        const visit = (node: any) => {
+          if (!node) return
+          switch (node.type) {
+            case 'Program':
+              for (const stmt of node.body) visit(stmt)
+              break
+            case 'BlockStatement':
+              for (const stmt of node.body) visit(stmt)
+              break
+            case 'FunctionDeclaration': {
+              const name = node.id?.name ?? `fn_${fnCounter++}`
+              const id = `${fileEntry.path}::${name}`
+              addNode(id, name, { inferredName: name, confidence: 'high' })
+              ctxStack.push(id)
+              visit(node.body)
+              ctxStack.pop()
+              break
+            }
+            case 'FunctionExpression':
+            case 'ArrowFunctionExpression': {
+              const name = node.id?.name ?? `fn_${fnCounter++}`
+              const id = `${fileEntry.path}::${name}`
+              addNode(id, name, { inferredName: name, confidence: 'medium' })
+              ctxStack.push(id)
+              if (node.body) visit(node.body)
+              ctxStack.pop()
+              break
+            }
+            case 'VariableDeclaration':
+              for (const decl of node.declarations || []) visit(decl)
+              break
+            case 'VariableDeclarator':
+              if (node.init && ['FunctionExpression', 'ArrowFunctionExpression'].includes(node.init.type)) {
+                const name = node.id?.name ?? `fn_${fnCounter++}`
+                const id = `${fileEntry.path}::${name}`
+                addNode(id, name, { inferredName: name, confidence: 'medium' })
+                ctxStack.push(id)
+                visit(node.init.body)
+                ctxStack.pop()
+              } else {
+                visit(node.init)
+              }
+              break
+            case 'ExpressionStatement':
+              visit(node.expression)
+              break
+            case 'CallExpression': {
+              const calleeName = stringifyCallee(node.callee) ?? 'unknown'
+              const targetId = `${fileEntry.path}::${calleeName}`
+              addNode(targetId, calleeName, {
+                inferredName: calleeName,
+                confidence: 'low',
+              })
+              const sourceId = ctxStack[ctxStack.length - 1] ?? fileNodeId
+              addEdge(sourceId, targetId, calleeName === 'unknown')
+              for (const arg of node.arguments || []) visit(arg)
+              break
+            }
+            case 'IfStatement':
+              visit(node.test)
+              visit(node.consequent)
+              visit(node.alternate)
+              break
+            case 'ReturnStatement':
+              visit(node.argument)
+              break
+            case 'AwaitExpression':
+            case 'UnaryExpression':
+            case 'UpdateExpression':
+            case 'SpreadElement':
+            case 'YieldExpression':
+              visit(node.argument)
+              break
+            case 'BinaryExpression':
+            case 'LogicalExpression':
+              visit(node.left)
+              visit(node.right)
+              break
+            case 'MemberExpression':
+              visit(node.object)
+              visit(node.property)
+              break
+            case 'ObjectExpression':
+              for (const prop of node.properties || []) {
+                if (prop.value) visit(prop.value)
+              }
+              break
+            case 'ArrayExpression':
+              for (const el of node.elements || []) visit(el)
+              break
+            default:
+              // intentionally ignore other node types for speed
+              break
+          }
+        }
+
+        visit(parseResult.ast)
+      }
+
+      const payload: GraphPayload = {
+        nodes: Array.from(nodeMap.values()),
+        edges,
+      }
+
+      return { success: true, data: payload, warnings }
+    } catch (error) {
+      warnings.push(String(error))
+      return { success: false, error: String(error), warnings }
+    }
+  }
+
+  private safeParse(code: string): { ok: true; ast: any } | { ok: false; reason: string } {
+    try {
+      const ast = acorn.parse(code, {
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+        allowReturnOutsideFunction: true,
+        allowAwaitOutsideFunction: true,
+      } as any)
+      return { ok: true, ast }
+    } catch (errModule) {
+      try {
+        const ast = acorn.parse(code, {
+          ecmaVersion: 'latest',
+          sourceType: 'script',
+          allowReturnOutsideFunction: true,
+          allowAwaitOutsideFunction: true,
+        } as any)
+        return { ok: true, ast }
+      } catch (errScript) {
+        return { ok: false, reason: (errScript as Error).message }
+      }
+    }
+  }
+}
+
+Comlink.expose(new AnalysisWorker())
