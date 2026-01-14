@@ -8,15 +8,11 @@ import { useGraphStore } from './store/useGraphStore'
 
 function App() {
   const [localError, setLocalError] = useState<string | null>(null)
-  const { setStatus, setWarnings, setError, setPayload, reset } = useGraphStore(
-    (state) => ({
-      setStatus: state.setStatus,
-      setWarnings: state.setWarnings,
-      setError: state.setError,
-      setPayload: state.setPayload,
-      reset: state.reset,
-    }),
-  )
+  const setStatus = useGraphStore((state) => state.setStatus)
+  const setWarnings = useGraphStore((state) => state.setWarnings)
+  const setError = useGraphStore((state) => state.setError)
+  const setPayload = useGraphStore((state) => state.setPayload)
+  const reset = useGraphStore((state) => state.reset)
 
   const workerApi = useMemo(() => {
     const worker = new AnalysisWorker()

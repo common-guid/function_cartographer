@@ -9,12 +9,14 @@ Heuristic (no-source-map) pipeline implemented: worker now scans bundles, parses
 - Graph schema + Zustand wiring; Sigma renders worker payload instead of demo graph.
 - UI/UX: status/warnings panel, disabled zip-fallback stub, node selection inspector placeholder.
 - Performance safeguards: parse fallbacks, size caps warning, deduped nodes/edges to limit clone cost.
+- Test suite added with Vitest + RTL + jsdom; coverage script wired. Tests cover worker helpers, graph store, and App status/warning flows with mocked worker/FS picker.
 
 ### Next Steps & Continuity
 - Implement zip upload fallback pathway and wire to worker processing.
 - Improve heuristic accuracy (module boundary detection, confidence scoring) and add lazy deep-resolution on focus.
 - Add ForceAtlas2 or similar layout for better spatial arrangement and test on large bundles.
 - Expand inspector/hover overlays with neighborhood highlighting and confidence indicators.
+- Run test suite after installing new dev dependencies (scripts: npm test / npm run test:coverage).
 
 ## Outstanding
 - Zip upload fallback (currently stubbed in UI).

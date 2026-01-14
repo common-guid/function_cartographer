@@ -11,11 +11,11 @@ type FileEntry = { handle: FileSystemFileHandle; path: string }
 
 const MAX_PARSE_BYTES = 5_000_000 // safety cap; warn if exceeded
 
-function moduleIdFromPath(path: string) {
+export function moduleIdFromPath(path: string) {
   return path.replace(/\.js$/i, '')
 }
 
-function stringifyCallee(node: any): string | null {
+export function stringifyCallee(node: any): string | null {
   switch (node?.type) {
     case 'Identifier':
       return node.name || null
