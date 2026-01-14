@@ -5,6 +5,7 @@ import type {
   GraphPayload,
   NodePayload,
   WorkerResult,
+  Confidence,
 } from '../types/graph'
 
 type FileEntry = { handle: FileSystemFileHandle; path: string }
@@ -13,6 +14,21 @@ const MAX_PARSE_BYTES = 5_000_000 // safety cap; warn if exceeded
 
 export function moduleIdFromPath(path: string) {
   return path.replace(/\.js$/i, '')
+}
+
+export function detectModuleIdFromSnippet(snippet: string): string | undefined {
+  const webpack = snippet.match(/__webpack_require__\(['"]([^'"]+)['"]\)/)
+  if (webpack?.[1]) return webpack[1]
+  const rollup = snippet.match(/\bdefine\(\s*\["([^"]+)"/)
+  if (rollup?.[1]) return rollup[1]
+  return undefined
+}
+
+export function scoreConfidence(base: Confidence, bonus = 0): Confidence {
+  const levels: Confidence[] = ['low', 'medium', 'high']
+  let idx = levels.indexOf(base)
+  idx = Math.min(levels.length - 1, Math.max(0, idx + bonus))
+  return levels[idx]
 }
 
 export function stringifyCallee(node: any): string | null {
@@ -53,6 +69,19 @@ async function collectJsFiles(
 }
 
 export class AnalysisWorker {
+  private lastPayload: GraphPayload | null = null
+
+  async resolveNodeDetail(nodeId: string): Promise<WorkerResult> {
+    if (!this.lastPayload) {
+      return { success: false, error: 'No analysis run yet', warnings: [] }
+    }
+    const node = this.lastPayload.nodes.find((n) => n.id === nodeId)
+    if (!node) {
+      return { success: false, error: `Node ${nodeId} not found`, warnings: [] }
+    }
+    const edges = this.lastPayload.edges.filter((e) => e.source === nodeId || e.target === nodeId)
+    return { success: true, data: { nodes: [node], edges }, warnings: [] }
+  }
   async processDirectory(handle: FileSystemDirectoryHandle): Promise<WorkerResult> {
     const warnings: string[] = []
     try {
@@ -91,6 +120,9 @@ export class AnalysisWorker {
           continue
         }
 
+        const moduleId =
+          detectModuleIdFromSnippet(code.slice(0, 2000)) ?? moduleIdFromPath(fileEntry.path)
+
         let fnCounter = 0
         const ctxStack: string[] = []
 
@@ -99,7 +131,7 @@ export class AnalysisWorker {
             nodeMap.set(id, {
               id,
               label,
-              moduleId: moduleIdFromPath(fileEntry.path),
+              moduleId,
               file: fileEntry.path,
               confidence: 'high',
               ...meta,
@@ -107,11 +139,11 @@ export class AnalysisWorker {
           }
         }
 
-        const addEdge = (source: string, target: string, weak = false) => {
+        const addEdge = (source: string, target: string, weak = false, confidence: Confidence = 'medium') => {
           const key = `${source}->${target}${weak ? ':w' : ''}`
           if (edgeSet.has(key)) return
           edgeSet.add(key)
-          edges.push({ source, target, weak, confidence: weak ? 'low' : 'medium' })
+          edges.push({ source, target, weak, confidence: weak ? 'low' : confidence })
         }
 
         const visit = (node: any) => {
@@ -165,10 +197,10 @@ export class AnalysisWorker {
               const targetId = `${fileEntry.path}::${calleeName}`
               addNode(targetId, calleeName, {
                 inferredName: calleeName,
-                confidence: 'low',
+                confidence: scoreConfidence('low', calleeName === 'unknown' ? 0 : 1),
               })
               const sourceId = ctxStack[ctxStack.length - 1] ?? fileNodeId
-              addEdge(sourceId, targetId, calleeName === 'unknown')
+              addEdge(sourceId, targetId, calleeName === 'unknown', calleeName === 'unknown' ? 'low' : 'medium')
               for (const arg of node.arguments || []) visit(arg)
               break
             }
@@ -218,6 +250,7 @@ export class AnalysisWorker {
         edges,
       }
 
+      this.lastPayload = payload
       return { success: true, data: payload, warnings }
     } catch (error) {
       warnings.push(String(error))

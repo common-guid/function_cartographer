@@ -3,13 +3,14 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 const processDirectory = vi.fn()
+const resolveNodeDetail = vi.fn().mockResolvedValue({ success: true, data: { nodes: [], edges: [] }, warnings: [] })
 
 vi.mock('../services/fileSystem', () => ({
   openDirectory: vi.fn().mockResolvedValue({ mock: true }),
 }))
 
 vi.mock('comlink', () => ({
-  wrap: () => ({ processDirectory }),
+  wrap: () => ({ processDirectory, resolveNodeDetail }),
   expose: vi.fn(),
 }))
 

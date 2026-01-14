@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import * as Comlink from 'comlink'
 import { GraphCanvas } from './components/GraphCanvas'
 import { openDirectory } from './services/fileSystem'
@@ -50,6 +50,26 @@ function App() {
   const selectedNodeId = useGraphStore((state) => state.selectedNode)
   const payload = useGraphStore((state) => state.payload)
   const selectedNode = payload?.nodes.find((n) => n.id === selectedNodeId)
+  const [detailWarning, setDetailWarning] = useState<string | null>(null)
+
+  useEffect(() => {
+    const fetchDetail = async () => {
+      if (!selectedNodeId) return
+      try {
+        const res = await workerApi.resolveNodeDetail(selectedNodeId)
+        if (!res.success) {
+          setDetailWarning(res.error)
+        } else if (res.warnings.length) {
+          setDetailWarning(res.warnings.join('; '))
+        } else {
+          setDetailWarning(null)
+        }
+      } catch (err) {
+        setDetailWarning(err instanceof Error ? err.message : String(err))
+      }
+    }
+    fetchDetail()
+  }, [selectedNodeId, workerApi])
 
   return (
     <div className="relative w-screen h-screen overflow-hidden">
@@ -92,6 +112,7 @@ function App() {
           ) : (
             <div className="text-gray-300">Select a node in the graph to view details.</div>
           )}
+          {detailWarning && <div className="text-amber-300">{detailWarning}</div>}
         </div>
       </div>
 
