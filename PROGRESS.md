@@ -12,6 +12,8 @@ Heuristic (no-source-map) pipeline implemented: worker now scans bundles, parses
 - Test suite added with Vitest + RTL + jsdom; coverage script wired. Tests cover worker helpers, graph store, and App status/warning flows with mocked worker/FS picker.
 - Heuristic upgrades: module-id heuristics (webpack/define), confidence scoring for nodes/edges, cached payload with lazy resolveNodeDetail hook, inspector shows confidence/module and lazy warnings.
 - Tests rerun after upgrades: all 3 files (10 tests) passing.
+- Layout performance: added ForceAtlas2 layout application before render; new layoutGraph helper.
+- Tests: expanded to 5 files/17 tests covering layout invocation, heuristics, store, worker helpers, and App flows.
 
 ### Next Steps & Continuity
 - Implement zip upload fallback pathway and wire to worker processing.
@@ -20,6 +22,7 @@ Heuristic (no-source-map) pipeline implemented: worker now scans bundles, parses
 - Expand inspector/hover overlays with neighborhood highlighting and confidence indicators.
 - Run test suite after installing new dev dependencies (scripts: npm test / npm run test:coverage).
 - Explore deeper lazy resolution (return source snippet) and richer module grouping; add layout and performance benchmarks.
+- Benchmark layout performance on large payloads and consider worker offload if needed.
 
 ## Outstanding
 - Zip upload fallback (currently stubbed in UI).

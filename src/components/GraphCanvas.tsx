@@ -3,6 +3,7 @@ import { SigmaContainer, useLoadGraph, useRegisterEvents } from '@react-sigma/co
 import '@react-sigma/core/lib/style.css'
 import Graph from 'graphology'
 import { useGraphStore } from '../store/useGraphStore'
+import { layoutGraph } from '../layout/runLayout'
 
 const colorForConfidence = (confidence?: 'high' | 'medium' | 'low') => {
   switch (confidence) {
@@ -54,6 +55,7 @@ const GraphLoader: React.FC = () => {
         size: edge.weak ? 1 : 2,
       })
     })
+    layoutGraph(graph)
 
     loadGraph(graph)
     setGraph(graph)
