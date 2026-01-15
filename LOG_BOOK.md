@@ -8,3 +8,5 @@ Added Dockerfile and docker-compose.yml to build and serve the Vite preview at p
 Tested JS-Flow-Lens on 10 production Webpack bundles (sample_js-files, 396 KB total). Built comprehensive evaluation report confirming MVP-ready functionality: 3000+ nodes, stable visualization, robust UI. Identified high-priority improvements (search/filter, edge toggle, layout offload). All tests passing.
 ## UI initialization fix | 2026-01-14
 Investigated blank white page issue on preview server. Created ErrorBoundary component to surface initialization errors and added File System Access API guard with clear error messaging. Rebuilt application and confirmed UI loads successfully with control panel, status indicator, and Sigma canvas. Screenshot captured showing functional idle state ready for user interaction.
+## Graph edge attribute error fix | 2026-01-15
+Fixed Graphology edge insertion to use the keyed edge API so attributes are passed correctly, preventing the InvalidArgumentsGraphError when loading a project directory.

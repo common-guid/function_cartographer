@@ -49,7 +49,7 @@ const GraphLoader: React.FC = () => {
     payload.edges.forEach((edge, idx) => {
       const edgeId = `${edge.source}->${edge.target}-${idx}`
       // @ts-ignore - graphology type mismatch for edge attributes
-      graph.addEdge(edgeId, edge.source, edge.target, {
+      graph.addEdgeWithKey(edgeId, edge.source, edge.target, {
         color: edge.weak ? '#555' : '#999',
         size: edge.weak ? 1 : 2,
       })
