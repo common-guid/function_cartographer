@@ -19,12 +19,10 @@ const colorForConfidence = (confidence?: 'high' | 'medium' | 'low') => {
 const GraphLoader: React.FC = () => {
   const loadGraph = useLoadGraph()
   const registerEvents = useRegisterEvents()
-  const { payload, setGraph, setSelectedNode, setHoveredNode } = useGraphStore((state) => ({
-    payload: state.payload,
-    setGraph: state.setGraph,
-    setSelectedNode: state.setSelectedNode,
-    setHoveredNode: state.setHoveredNode,
-  }))
+  const payload = useGraphStore((state) => state.payload)
+  const setGraph = useGraphStore((state) => state.setGraph)
+  const setSelectedNode = useGraphStore((state) => state.setSelectedNode)
+  const setHoveredNode = useGraphStore((state) => state.setHoveredNode)
 
   useEffect(() => {
     if (!payload) return
@@ -50,6 +48,7 @@ const GraphLoader: React.FC = () => {
 
     payload.edges.forEach((edge, idx) => {
       const edgeId = `${edge.source}->${edge.target}-${idx}`
+      // @ts-ignore - graphology type mismatch for edge attributes
       graph.addEdge(edgeId, edge.source, edge.target, {
         color: edge.weak ? '#555' : '#999',
         size: edge.weak ? 1 : 2,
@@ -59,7 +58,7 @@ const GraphLoader: React.FC = () => {
 
     loadGraph(graph)
     setGraph(graph)
-  }, [payload, loadGraph, setGraph])
+  }, [payload, loadGraph])
 
   useEffect(() => {
     registerEvents({
@@ -67,7 +66,7 @@ const GraphLoader: React.FC = () => {
       enterNode: ({ node }) => setHoveredNode(node),
       leaveNode: () => setHoveredNode(null),
     })
-  }, [registerEvents, setSelectedNode, setHoveredNode])
+  }, [registerEvents])
 
   return null
 }

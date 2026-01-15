@@ -56,6 +56,7 @@ async function collectJsFiles(
   prefix = '',
 ): Promise<FileEntry[]> {
   const results: FileEntry[] = []
+  // @ts-ignore - FileSystemDirectoryHandle.values() is standard but TS may lag
   for await (const entry of dir.values()) {
     const path = `${prefix}${entry.name}`
     if (entry.kind === 'file' && entry.name.endsWith('.js')) {
