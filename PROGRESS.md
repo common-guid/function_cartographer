@@ -42,6 +42,13 @@ Tested JS-Flow-Lens on 10 production Webpack bundles from sample_js-files direct
 ## Phase 3: Noise Reduction & Filtering | 2026-01-16
 Implemented node tagging (source/vendor/boilerplate/framework) in the analysis worker and added filter state + UI to hide noise by default. Graph rendering now filters nodes/edges by tags, confidence, and search query, with optional neighbor expansion. Sidebar includes search, toggles, min-confidence control, and inspector shows full tag list. Test suite passes (5 files, 17 tests).
 
+## Phase 3: Integration of Wakaru Unpacker | 2026-01-16
+Replaced heuristic-based noise filtering with structural de-bundling using `@wakaru/unpacker`.
+- **Dependencies**: Added `@wakaru/unpacker` and `vite-plugin-node-polyfills` to support Node.js globals (Buffer, process) in the browser worker.
+- **Worker Refactor**: The `AnalysisWorker` now attempts to unpack files using Wakaru first. If successful, it iterates over virtual modules to build the graph, allowing precise `source` vs `vendor` tagging based on recovered paths (e.g. `node_modules`).
+- **Fallback**: Implemented robust fallback to raw file analysis if unpacking fails or yields no modules.
+- **Verification**: Verified functionality with new unit tests (`src/workers/analysis.worker.test.ts`) covering raw files, real bundles, and tag detection.
+
 ### Next Steps & Continuity
-- Consider refining tag heuristics and adding more framework/vendor patterns as needed.
-- Add tests that cover filter behavior and tagging heuristics if regressions appear.
+- Evaluate performance on very large bundles (>5MB) and optimize memory usage if needed.
+- Consider visualizing the "virtual filesystem" structure recovered by Wakaru in the UI.
