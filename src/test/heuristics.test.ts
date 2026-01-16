@@ -31,8 +31,8 @@ describe('AnalysisWorker.resolveNodeDetail', () => {
     const worker = new AnalysisWorker()
     const payload: GraphPayload = {
       nodes: [
-        { id: 'a', label: 'a', confidence: 'medium' },
-        { id: 'b', label: 'b', confidence: 'low' },
+        { id: 'a', label: 'a', confidence: 'medium', tags: ['source'] },
+        { id: 'b', label: 'b', confidence: 'low', tags: ['source'] },
       ],
       edges: [
         { source: 'a', target: 'b' },

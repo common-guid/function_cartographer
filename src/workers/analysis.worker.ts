@@ -6,6 +6,7 @@ import type {
   NodePayload,
   WorkerResult,
   Confidence,
+  NodeType,
 } from '../types/graph'
 
 type FileEntry = { handle: FileSystemFileHandle; path: string }
@@ -22,6 +23,34 @@ export function detectModuleIdFromSnippet(snippet: string): string | undefined {
   const rollup = snippet.match(/\bdefine\(\s*\["([^"]+)"/)
   if (rollup?.[1]) return rollup[1]
   return undefined
+}
+export function detectTags(path: string, snippet: string): NodeType[] {
+  const tags: NodeType[] = []
+  const lowerPath = path.toLowerCase()
+  const isVendor =
+    lowerPath.includes('node_modules') ||
+    lowerPath.includes('vendor') ||
+    lowerPath.includes('chunk-vendors') ||
+    lowerPath.includes('polyfill')
+  tags.push(isVendor ? 'vendor' : 'source')
+
+  if (
+    snippet.includes('__webpack_require__') ||
+    snippet.includes('self.webpackChunk') ||
+    snippet.includes('(function(modules)')
+  ) {
+    tags.push('boilerplate')
+  }
+
+  if (
+    snippet.includes('React.createElement') ||
+    snippet.includes('.jsx') ||
+    snippet.includes('$$typeof')
+  ) {
+    tags.push('framework')
+  }
+
+  return Array.from(new Set(tags))
 }
 
 export function scoreConfidence(base: Confidence, bonus = 0): Confidence {
@@ -99,14 +128,6 @@ export class AnalysisWorker {
       for (const fileEntry of files) {
         const file = await fileEntry.handle.getFile()
         const fileNodeId = `file:${fileEntry.path}`
-        nodeMap.set(fileNodeId, {
-          id: fileNodeId,
-          label: fileEntry.path,
-          moduleId: moduleIdFromPath(fileEntry.path),
-          file: fileEntry.path,
-          size: file.size,
-          confidence: 'medium',
-        })
 
         if (file.size > MAX_PARSE_BYTES) {
           warnings.push(
@@ -115,6 +136,17 @@ export class AnalysisWorker {
         }
 
         const code = await file.text()
+        const snippet = code.slice(0, 1000)
+        const fileTags = detectTags(fileEntry.path, snippet)
+        nodeMap.set(fileNodeId, {
+          id: fileNodeId,
+          label: fileEntry.path,
+          moduleId: moduleIdFromPath(fileEntry.path),
+          file: fileEntry.path,
+          size: file.size,
+          confidence: 'medium',
+          tags: fileTags,
+        })
         const parseResult = this.safeParse(code)
         if (!parseResult.ok) {
           warnings.push(`${fileEntry.path}: parse failed (${parseResult.reason})`)
@@ -135,6 +167,7 @@ export class AnalysisWorker {
               moduleId,
               file: fileEntry.path,
               confidence: 'high',
+              tags: fileTags,
               ...meta,
             })
           }

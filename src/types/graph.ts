@@ -1,4 +1,14 @@
 export type Confidence = 'high' | 'medium' | 'low'
+export type NodeType = 'source' | 'vendor' | 'boilerplate' | 'framework'
+
+export interface FilterState {
+  searchQuery: string
+  showVendor: boolean
+  showBoilerplate: boolean
+  showFramework: boolean
+  minConfidence: Confidence
+  includeNeighbors: boolean
+}
 
 export interface NodePayload {
   id: string
@@ -10,6 +20,7 @@ export interface NodePayload {
   inferredName?: string
   minifiedName?: string
   confidence: Confidence
+  tags: NodeType[]
 }
 
 export interface EdgePayload {

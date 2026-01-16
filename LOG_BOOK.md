@@ -10,3 +10,7 @@ Tested JS-Flow-Lens on 10 production Webpack bundles (sample_js-files, 396 KB to
 Investigated blank white page issue on preview server. Created ErrorBoundary component to surface initialization errors and added File System Access API guard with clear error messaging. Rebuilt application and confirmed UI loads successfully with control panel, status indicator, and Sigma canvas. Screenshot captured showing functional idle state ready for user interaction.
 ## Graph edge attribute error fix | 2026-01-15
 Fixed Graphology edge insertion to use the keyed edge API so attributes are passed correctly, preventing the InvalidArgumentsGraphError when loading a project directory.
+## Noise reduction filters | 2026-01-16
+Added node tagging in the analysis worker and UI-driven filters (search, confidence, vendor/framework/boilerplate toggles) with optional neighbor expansion to reduce graph noise.
+## Filter test suite | 2026-01-16
+Created comprehensive test coverage for filter feature: detectTags heuristics (23 tests), filter store state management (22 tests), and filter rendering logic including tag/confidence/search filtering and edge visibility (31 tests). All 93 tests passing.

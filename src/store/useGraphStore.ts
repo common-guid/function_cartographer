@@ -1,8 +1,16 @@
 import { create } from 'zustand'
 import Graph from 'graphology'
-import type { GraphPayload } from '../types/graph'
+import type { FilterState, GraphPayload } from '../types/graph'
 
 type Status = 'idle' | 'loading' | 'ready' | 'error'
+const DEFAULT_FILTERS: FilterState = {
+  searchQuery: '',
+  showVendor: false,
+  showBoilerplate: false,
+  showFramework: false,
+  minConfidence: 'low',
+  includeNeighbors: false,
+}
 
 interface GraphState {
   graph: Graph | null
@@ -12,6 +20,7 @@ interface GraphState {
   error: string | null
   hoveredNode: string | null
   selectedNode: string | null
+  filters: FilterState
   setGraph: (graph: Graph | null) => void
   setPayload: (payload: GraphPayload | null) => void
   setStatus: (status: Status) => void
@@ -19,6 +28,7 @@ interface GraphState {
   setError: (error: string | null) => void
   setHoveredNode: (node: string | null) => void
   setSelectedNode: (node: string | null) => void
+  setFilter: <K extends keyof FilterState>(key: K, value: FilterState[K]) => void
   reset: () => void
 }
 
@@ -30,6 +40,7 @@ export const useGraphStore = create<GraphState>((set) => ({
   error: null,
   hoveredNode: null,
   selectedNode: null,
+  filters: DEFAULT_FILTERS,
   setGraph: (graph) => set({ graph }),
   setPayload: (payload) => set({ payload }),
   setStatus: (status) => set({ status }),
@@ -37,6 +48,7 @@ export const useGraphStore = create<GraphState>((set) => ({
   setError: (error) => set({ error }),
   setHoveredNode: (node) => set({ hoveredNode: node }),
   setSelectedNode: (node) => set({ selectedNode: node }),
+  setFilter: (key, value) => set((state) => ({ filters: { ...state.filters, [key]: value } })),
   reset: () =>
     set({
       graph: null,
@@ -46,5 +58,6 @@ export const useGraphStore = create<GraphState>((set) => ({
       error: null,
       hoveredNode: null,
       selectedNode: null,
+      filters: DEFAULT_FILTERS,
     }),
 }))

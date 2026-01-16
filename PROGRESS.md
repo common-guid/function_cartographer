@@ -38,3 +38,10 @@ Tested JS-Flow-Lens on 10 production Webpack bundles from sample_js-files direct
 - Zip upload fallback (currently stubbed in UI).
 - Layout algorithm integration for graph (ForceAtlas2) and performance benchmarking on large bundles.
 - Confidence-based styling refinement and deeper heuristic naming accuracy.
+
+## Phase 3: Noise Reduction & Filtering | 2026-01-16
+Implemented node tagging (source/vendor/boilerplate/framework) in the analysis worker and added filter state + UI to hide noise by default. Graph rendering now filters nodes/edges by tags, confidence, and search query, with optional neighbor expansion. Sidebar includes search, toggles, min-confidence control, and inspector shows full tag list. Test suite passes (5 files, 17 tests).
+
+### Next Steps & Continuity
+- Consider refining tag heuristics and adding more framework/vendor patterns as needed.
+- Add tests that cover filter behavior and tagging heuristics if regressions appear.
