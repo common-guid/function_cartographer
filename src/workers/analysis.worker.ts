@@ -1,5 +1,6 @@
 import * as Comlink from 'comlink'
 import * as acorn from 'acorn'
+import { unpack } from '@wakaru/unpacker'
 import type {
   EdgePayload,
   GraphPayload,
@@ -98,6 +99,13 @@ async function collectJsFiles(
   return results
 }
 
+interface ModuleContext {
+  path: string
+  code: string
+  tags: NodeType[]
+  moduleId?: string
+}
+
 export class AnalysisWorker {
   private lastPayload: GraphPayload | null = null
 
@@ -112,6 +120,7 @@ export class AnalysisWorker {
     const edges = this.lastPayload.edges.filter((e) => e.source === nodeId || e.target === nodeId)
     return { success: true, data: { nodes: [node], edges }, warnings: [] }
   }
+
   async processDirectory(handle: FileSystemDirectoryHandle): Promise<WorkerResult> {
     const warnings: string[] = []
     try {
@@ -125,9 +134,32 @@ export class AnalysisWorker {
       const edgeSet = new Set<string>()
       const edges: EdgePayload[] = []
 
+      // Helper to add nodes/edges from anywhere
+      const addNode = (id: string, label: string, meta: Partial<NodePayload>) => {
+        if (!nodeMap.has(id)) {
+          // Defaults if not provided in meta
+           const defaultTags: NodeType[] = ['source']
+           nodeMap.set(id, {
+             id,
+             label,
+             moduleId: '',
+             file: '',
+             confidence: 'medium',
+             tags: defaultTags,
+             ...meta,
+           })
+        }
+      }
+
+      const addEdge = (source: string, target: string, weak = false, confidence: Confidence = 'medium') => {
+        const key = `${source}->${target}${weak ? ':w' : ''}`
+        if (edgeSet.has(key)) return
+        edgeSet.add(key)
+        edges.push({ source, target, weak, confidence: weak ? 'low' : confidence })
+      }
+
       for (const fileEntry of files) {
         const file = await fileEntry.handle.getFile()
-        const fileNodeId = `file:${fileEntry.path}`
 
         if (file.size > MAX_PARSE_BYTES) {
           warnings.push(
@@ -136,147 +168,65 @@ export class AnalysisWorker {
         }
 
         const code = await file.text()
-        const snippet = code.slice(0, 1000)
-        const fileTags = detectTags(fileEntry.path, snippet)
-        nodeMap.set(fileNodeId, {
-          id: fileNodeId,
-          label: fileEntry.path,
-          moduleId: moduleIdFromPath(fileEntry.path),
-          file: fileEntry.path,
-          size: file.size,
-          confidence: 'medium',
-          tags: fileTags,
+
+        // Attempt to unpack first
+        let unpackedModules: any[] = []
+        try {
+            const result = await unpack(code)
+            if (result) unpackedModules = result.modules
+        } catch (err) {
+            console.warn('De-bundling failed, analyzing raw file', err)
+            warnings.push(`${fileEntry.path}: de-bundling failed, fallback to raw`)
+        }
+
+        // Always create a node for the physical file
+        const fileTags = detectTags(fileEntry.path, code.slice(0, 1000))
+        const fileNodeId = `file:${fileEntry.path}`
+        addNode(fileNodeId, fileEntry.path, {
+             moduleId: moduleIdFromPath(fileEntry.path),
+             file: fileEntry.path,
+             size: file.size,
+             confidence: 'medium',
+             tags: fileTags,
         })
-        const parseResult = this.safeParse(code)
-        if (!parseResult.ok) {
-          warnings.push(`${fileEntry.path}: parse failed (${parseResult.reason})`)
-          continue
-        }
 
-        const moduleId =
-          detectModuleIdFromSnippet(code.slice(0, 2000)) ?? moduleIdFromPath(fileEntry.path)
+        if (unpackedModules.length > 0) {
+            // Unpack Success
+            for (const mod of unpackedModules) {
+                // Determine tags based on module path AND original file path
+                const pathStr = mod.path ?? ''
 
-        let fnCounter = 0
-        const ctxStack: string[] = []
+                const isVendorFile = fileEntry.path.includes('node_modules') || fileEntry.path.includes('vendor')
+                const isVendorModule = pathStr.includes('node_modules') || pathStr.startsWith('vendor')
 
-        const addNode = (id: string, label: string, meta: Partial<NodePayload>) => {
-          if (!nodeMap.has(id)) {
-            nodeMap.set(id, {
-              id,
-              label,
-              moduleId,
-              file: fileEntry.path,
-              confidence: 'high',
-              tags: fileTags,
-              ...meta,
-            })
-          }
-        }
+                const isVendor = isVendorFile || isVendorModule
+                const tags: NodeType[] = isVendor ? ['vendor'] : ['source']
 
-        const addEdge = (source: string, target: string, weak = false, confidence: Confidence = 'medium') => {
-          const key = `${source}->${target}${weak ? ':w' : ''}`
-          if (edgeSet.has(key)) return
-          edgeSet.add(key)
-          edges.push({ source, target, weak, confidence: weak ? 'low' : confidence })
-        }
+                // Prefix node IDs with the bundle name to avoid collisions
+                // If pathStr is empty, we treat it as the file itself.
+                const uniquePath = pathStr ? `${fileEntry.path}::${pathStr}` : fileEntry.path
 
-        const visit = (node: any) => {
-          if (!node) return
-          switch (node.type) {
-            case 'Program':
-              for (const stmt of node.body) visit(stmt)
-              break
-            case 'BlockStatement':
-              for (const stmt of node.body) visit(stmt)
-              break
-            case 'FunctionDeclaration': {
-              const name = node.id?.name ?? `fn_${fnCounter++}`
-              const id = `${fileEntry.path}::${name}`
-              addNode(id, name, { inferredName: name, confidence: 'high' })
-              ctxStack.push(id)
-              visit(node.body)
-              ctxStack.pop()
-              break
+                // Analyze the unpacked module code
+                // We do NOT pass fileNodeId here, so each virtual module gets its own container node (file:uniquePath)
+                // If uniquePath == fileEntry.path, it naturally maps to the physical file node.
+                this.analyzeModule({
+                    path: uniquePath,
+                    code: mod.code,
+                    tags,
+                    moduleId: moduleIdFromPath(uniquePath)
+                }, addNode, addEdge, warnings)
             }
-            case 'FunctionExpression':
-            case 'ArrowFunctionExpression': {
-              const name = node.id?.name ?? `fn_${fnCounter++}`
-              const id = `${fileEntry.path}::${name}`
-              addNode(id, name, { inferredName: name, confidence: 'medium' })
-              ctxStack.push(id)
-              if (node.body) visit(node.body)
-              ctxStack.pop()
-              break
-            }
-            case 'VariableDeclaration':
-              for (const decl of node.declarations || []) visit(decl)
-              break
-            case 'VariableDeclarator':
-              if (node.init && ['FunctionExpression', 'ArrowFunctionExpression'].includes(node.init.type)) {
-                const name = node.id?.name ?? `fn_${fnCounter++}`
-                const id = `${fileEntry.path}::${name}`
-                addNode(id, name, { inferredName: name, confidence: 'medium' })
-                ctxStack.push(id)
-                visit(node.init.body)
-                ctxStack.pop()
-              } else {
-                visit(node.init)
-              }
-              break
-            case 'ExpressionStatement':
-              visit(node.expression)
-              break
-            case 'CallExpression': {
-              const calleeName = stringifyCallee(node.callee) ?? 'unknown'
-              const targetId = `${fileEntry.path}::${calleeName}`
-              addNode(targetId, calleeName, {
-                inferredName: calleeName,
-                confidence: scoreConfidence('low', calleeName === 'unknown' ? 0 : 1),
-              })
-              const sourceId = ctxStack[ctxStack.length - 1] ?? fileNodeId
-              addEdge(sourceId, targetId, calleeName === 'unknown', calleeName === 'unknown' ? 'low' : 'medium')
-              for (const arg of node.arguments || []) visit(arg)
-              break
-            }
-            case 'IfStatement':
-              visit(node.test)
-              visit(node.consequent)
-              visit(node.alternate)
-              break
-            case 'ReturnStatement':
-              visit(node.argument)
-              break
-            case 'AwaitExpression':
-            case 'UnaryExpression':
-            case 'UpdateExpression':
-            case 'SpreadElement':
-            case 'YieldExpression':
-              visit(node.argument)
-              break
-            case 'BinaryExpression':
-            case 'LogicalExpression':
-              visit(node.left)
-              visit(node.right)
-              break
-            case 'MemberExpression':
-              visit(node.object)
-              visit(node.property)
-              break
-            case 'ObjectExpression':
-              for (const prop of node.properties || []) {
-                if (prop.value) visit(prop.value)
-              }
-              break
-            case 'ArrayExpression':
-              for (const el of node.elements || []) visit(el)
-              break
-            default:
-              // intentionally ignore other node types for speed
-              break
-          }
-        }
+        } else {
+             // Fallback: Raw analysis
+             const moduleId = detectModuleIdFromSnippet(code.slice(0, 2000)) ?? moduleIdFromPath(fileEntry.path)
 
-        visit(parseResult.ast)
+             this.analyzeModule({
+                 path: fileEntry.path,
+                 code,
+                 tags: fileTags,
+                 moduleId
+             }, addNode, addEdge, warnings, fileNodeId)
+        }
       }
 
       const payload: GraphPayload = {
@@ -290,6 +240,163 @@ export class AnalysisWorker {
       warnings.push(String(error))
       return { success: false, error: String(error), warnings }
     }
+  }
+
+  private analyzeModule(
+      ctx: ModuleContext,
+      addNode: (id: string, label: string, meta: Partial<NodePayload>) => void,
+      addEdge: (source: string, target: string, weak?: boolean, confidence?: Confidence) => void,
+      warnings: string[],
+      parentNodeId?: string
+  ) {
+    const parseResult = this.safeParse(ctx.code)
+    if (!parseResult.ok) {
+      warnings.push(`${ctx.path}: parse failed (${parseResult.reason})`)
+      return
+    }
+
+    let fnCounter = 0
+    const ctxStack: string[] = []
+    const fileNodeId = parentNodeId ?? `file:${ctx.path}`
+
+    // If we are analyzing a virtual module, we might want to represent the module itself as a node if it's not the file node?
+    // In the raw analysis, `fileNodeId` was added before analyzeModule.
+    // In unpacked analysis, we iterate modules. The `addNode` calls inside `visit` will create function nodes.
+    // We should ensure the module itself is linked or represented if necessary, but the current logic mainly focuses on functions/variables.
+    // However, for correct edge creation, we need a base node ID if the stack is empty.
+
+    // In unpacked mode, parentNodeId is undefined, so fileNodeId becomes `file:${ctx.path}` (e.g., `file:bundle.js::node_modules/foo/index.js`).
+    // We should probably ensure this "file" node exists so function nodes can link to it if needed, or at least it serves as a container.
+    // But the original code only added the file node once per file.
+    // For unpacked modules, each module effectively becomes a "file".
+
+    // Let's add a node for the module/file if it doesn't exist, to support the graph structure
+     addNode(fileNodeId, ctx.path, {
+        moduleId: ctx.moduleId ?? moduleIdFromPath(ctx.path),
+        file: ctx.path,
+        confidence: 'medium',
+        tags: ctx.tags,
+     })
+
+
+    const visit = (node: any) => {
+      if (!node) return
+      switch (node.type) {
+        case 'Program':
+          for (const stmt of node.body) visit(stmt)
+          break
+        case 'BlockStatement':
+          for (const stmt of node.body) visit(stmt)
+          break
+        case 'FunctionDeclaration': {
+          const name = node.id?.name ?? `fn_${fnCounter++}`
+          const id = `${ctx.path}::${name}`
+          addNode(id, name, {
+              inferredName: name,
+              confidence: 'high',
+              tags: ctx.tags,
+              moduleId: ctx.moduleId,
+              file: ctx.path
+          })
+          ctxStack.push(id)
+          visit(node.body)
+          ctxStack.pop()
+          break
+        }
+        case 'FunctionExpression':
+        case 'ArrowFunctionExpression': {
+          const name = node.id?.name ?? `fn_${fnCounter++}`
+          const id = `${ctx.path}::${name}`
+          addNode(id, name, {
+              inferredName: name,
+              confidence: 'medium',
+              tags: ctx.tags,
+              moduleId: ctx.moduleId,
+              file: ctx.path
+          })
+          ctxStack.push(id)
+          if (node.body) visit(node.body)
+          ctxStack.pop()
+          break
+        }
+        case 'VariableDeclaration':
+          for (const decl of node.declarations || []) visit(decl)
+          break
+        case 'VariableDeclarator':
+          if (node.init && ['FunctionExpression', 'ArrowFunctionExpression'].includes(node.init.type)) {
+            const name = node.id?.name ?? `fn_${fnCounter++}`
+            const id = `${ctx.path}::${name}`
+            addNode(id, name, {
+                inferredName: name,
+                confidence: 'medium',
+                tags: ctx.tags,
+                moduleId: ctx.moduleId,
+                file: ctx.path
+            })
+            ctxStack.push(id)
+            visit(node.init.body)
+            ctxStack.pop()
+          } else {
+            visit(node.init)
+          }
+          break
+        case 'ExpressionStatement':
+          visit(node.expression)
+          break
+        case 'CallExpression': {
+          const calleeName = stringifyCallee(node.callee) ?? 'unknown'
+          const targetId = `${ctx.path}::${calleeName}`
+          addNode(targetId, calleeName, {
+            inferredName: calleeName,
+            confidence: scoreConfidence('low', calleeName === 'unknown' ? 0 : 1),
+            tags: ctx.tags, // Inherit tags from current module? Or source?
+            moduleId: ctx.moduleId,
+            file: ctx.path
+          })
+          const sourceId = ctxStack[ctxStack.length - 1] ?? fileNodeId
+          addEdge(sourceId, targetId, calleeName === 'unknown', calleeName === 'unknown' ? 'low' : 'medium')
+          for (const arg of node.arguments || []) visit(arg)
+          break
+        }
+        case 'IfStatement':
+          visit(node.test)
+          visit(node.consequent)
+          visit(node.alternate)
+          break
+        case 'ReturnStatement':
+          visit(node.argument)
+          break
+        case 'AwaitExpression':
+        case 'UnaryExpression':
+        case 'UpdateExpression':
+        case 'SpreadElement':
+        case 'YieldExpression':
+          visit(node.argument)
+          break
+        case 'BinaryExpression':
+        case 'LogicalExpression':
+          visit(node.left)
+          visit(node.right)
+          break
+        case 'MemberExpression':
+          visit(node.object)
+          visit(node.property)
+          break
+        case 'ObjectExpression':
+          for (const prop of node.properties || []) {
+            if (prop.value) visit(prop.value)
+          }
+          break
+        case 'ArrayExpression':
+          for (const el of node.elements || []) visit(el)
+          break
+        default:
+          // intentionally ignore other node types for speed
+          break
+      }
+    }
+
+    visit(parseResult.ast)
   }
 
   private safeParse(code: string): { ok: true; ast: any } | { ok: false; reason: string } {
