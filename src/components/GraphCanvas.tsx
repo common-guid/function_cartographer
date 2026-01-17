@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useMemo } from 'react'
 import { SigmaContainer, useLoadGraph, useRegisterEvents } from '@react-sigma/core'
 import '@react-sigma/core/lib/style.css'
 import Graph from 'graphology'
@@ -134,12 +134,13 @@ const GraphLoader: React.FC = () => {
   return null
 }
 
-export const GraphCanvas: React.FC = () => {
+export const GraphCanvas: React.FC = React.memo(() => {
+  const style = useMemo(() => ({ height: '100%', width: '100%' }), [])
   return (
     <div className="w-full h-screen bg-gray-900">
-      <SigmaContainer style={{ height: '100%', width: '100%' }}>
+      <SigmaContainer style={style}>
         <GraphLoader />
       </SigmaContainer>
     </div>
   )
-}
+})
