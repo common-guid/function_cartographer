@@ -14,3 +14,7 @@ Fixed Graphology edge insertion to use the keyed edge API so attributes are pass
 Added node tagging in the analysis worker and UI-driven filters (search, confidence, vendor/framework/boilerplate toggles) with optional neighbor expansion to reduce graph noise.
 ## Filter test suite | 2026-01-16
 Created comprehensive test coverage for filter feature: detectTags heuristics (23 tests), filter store state management (22 tests), and filter rendering logic including tag/confidence/search filtering and edge visibility (31 tests). All 93 tests passing.
+## Integration of Wakaru Unpacker | 2026-01-16
+Integrated `@wakaru/unpacker` for structural de-bundling in the analysis worker, allowing precise tagging of vendor modules and falling back to raw analysis.
+## Migration to Node.js CLI Pipeline | 2026-01-16
+Moved analysis from browser worker to a Node.js CLI (`js-lens serve`) to solve `@wakaru/unpacker` dynamic require issues. Created a server-side analysis pipeline using Express, handled the dependency constraints with a custom require shim, and refactored the frontend to consume the API.
