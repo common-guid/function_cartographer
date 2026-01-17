@@ -1,108 +1,97 @@
 # JS-Flow-Lens
-Browser-based static analysis that ingests bundled JavaScript (without source maps) to reconstruct a function-level call graph for interactive exploration.
+A static analysis visualization tool that ingests bundled JavaScript (without source maps) to reconstruct a function-level call graph for interactive exploration.
 
 ## Purpose
 - Audit production bundles when repository access or source maps are unavailable.
-- Keep the UI responsive by offloading parsing and graph construction to a Web Worker.
-- Provide quick insight into module/group boundaries, call relationships, and confidence levels for inferred names.
+- Visualize module boundaries and call relationships using heuristic reconstruction and de-bundling.
+- Provide quick insight into architectural integrity and potential "dead code" or "vendor bloat".
 
 ## Architecture (big picture)
-- **Main thread (React + Sigma.js):** Renders the graph, handles user interactions, status/warnings, and triggers lazy detail fetches.
-- **Worker (AnalysisWorker via Comlink):** Reads bundle files, parses with Acorn, detects bundler patterns (webpack/define) for module IDs, extracts functions/calls, scores confidence, and builds graph payloads. Caches payload for `resolveNodeDetail`.
-- **Graph data:** Graphology graph rendered with Sigma.js; ForceAtlas2 layout applied before render for spatial distribution.
-- **State:** Zustand store holds payload, Graphology instance, status/warnings/errors, hover/selection, and inspector data.
-- **Heuristics:** Module ID inference from runtime wrappers, inferred callee names, confidence scoring, weak edges for unknown calls, lazy node detail lookup.
+- **CLI (Node.js):** The `js-lens serve <dir>` command runs a local Express server. It analyzes the target directory using `@wakaru/unpacker` (to de-bundle Webpack/Rollup chunks) and Acorn (to parse AST and extract call graphs).
+- **Frontend (React + Sigma.js):** Connects to the local CLI server to fetch the analysis payload. Renders the graph using WebGL for high performance.
+- **Analysis Logic:**
+    - **De-bundling:** Uses `@wakaru/unpacker` to break bundles back into virtual modules.
+    - **Tagging:** Heuristically tags nodes as `source`, `vendor`, `boilerplate`, or `framework` based on path and content.
+    - **Graph Building:** Constructs a directed graph of function declarations and calls.
+- **State:** Zustand store holds payload, Graphology instance, status/warnings/errors, and filter state.
 
 ## Usage
+
 ### Prereqs
 - Node 18+ recommended.
-- Modern Chromium-based browser (File System Access API).
 
 ### Install
 ```bash
 npm install
+npm run build      # Builds the frontend
+npm run build:cli  # Builds the CLI
 ```
 
-### Run dev server
+### Analyze a directory
+Run the CLI to analyze a directory containing JavaScript bundles and serve the visualization:
+
 ```bash
-npm run dev
-# open http://localhost:5173
+# Run from the project root
+./dist-cli/index.js serve /path/to/your/bundles
+
+# Or using the npm script shorthand (dev mode)
+npm run dev:cli -- serve /path/to/your/bundles
 ```
 
-### Build
-```bash
-npm run build
-```
+Options:
+- `-p, --port <number>`: Port to run the server on (default: 3000).
 
-### Preview production build
-```bash
-npm run preview
-```
+Open your browser to `http://localhost:3000` (or the specified port).
 
-### Lint
-```bash
-npm run lint
-```
+### Development Mode
+
+1. **Start the Frontend Dev Server:**
+   ```bash
+   npm run dev
+   ```
+   This starts Vite at `http://localhost:5173`. It is configured to proxy API requests to `http://localhost:3000`.
+
+2. **Start the CLI Server (in a separate terminal):**
+   ```bash
+   npm run dev:cli -- serve ./sample_js-files/simple -p 3000
+   ```
+   This runs the analysis server on port 3000 using `tsx` for hot-reloading backend logic.
 
 ### Tests
 ```bash
-npm test              # full suite
-npm run test:coverage # coverage
+npm test              # full suite (CLI logic + frontend components)
+npm run test:coverage # coverage report
 ```
 
 ## Docker / Compose
-### Build and run with Docker
-```bash
-docker build -t js-flow-lens .
-docker run -p 4173:4173 js-flow-lens
-# open http://localhost:4173
-```
-
-### Run with docker compose
-```bash
-docker compose up --build
-# open http://localhost:4173
-```
+*(Note: Docker instructions need update for CLI architecture - coming soon)*
 
 ## How it works (flow)
-1. User selects a bundle directory (File System Access API).
-2. Main thread hands the directory handle to `AnalysisWorker` via Comlink.
-3. Worker enumerates `.js` files, parses with Acorn, detects module IDs, extracts functions/calls, scores confidence, and builds nodes/edges.
-4. Payload returns to the main thread, normalized into Graphology; ForceAtlas2 layout runs, Sigma renders.
-5. On node selection, UI calls `resolveNodeDetail` for cached neighborhood data and shows module/confidence plus any warnings.
+1. **CLI Analysis:** The user runs `js-lens serve <dir>`. The CLI scans the directory, de-bundles files, parses ASTs, and builds a graph payload in memory.
+2. **Server:** An Express server starts, exposing the payload at `GET /api/graph` and serving the static frontend assets from `dist/`.
+3. **Frontend Load:** The browser loads the app, which immediately fetches the graph data from the API.
+4. **Visualization:** Sigma.js renders the graph. ForceAtlas2 layout is applied to cluster related modules.
+5. **Interaction:** Users can click nodes to inspect details, filter by tags (Vendor, Framework, etc.), and search for specific functions.
 
 ## Development guide
 ### Extending parsing/heuristics
-- Entry: `src/workers/analysis.worker.ts`
-- Helpers: `stringifyCallee`, `detectModuleIdFromSnippet`, `scoreConfidence`
-- Add bundler pattern detectors (Rollup chunk maps, SystemJS, etc.) and improve `moduleId`.
-- Enhance name inference via property keys, export objects, or nearby string literals.
-- For large bundles, keep parsing in the worker; consider streamed reads or throttled traversal.
+- **Location:** `src/cli/analysis.ts`
+- **Logic:** This file contains the `Analyzer` class, which handles file traversal, unpacking, and AST traversal.
+- **Helpers:** `detectTags`, `scoreConfidence`, `moduleIdFromPath`.
 
 ### Graph/layout improvements
-- Layout helper: `src/layout/runLayout.ts` (ForceAtlas2). Tune `slowDown`, `gravity`, `iterations` for larger graphs.
-- For very large graphs, consider running layout in a dedicated worker (Graphology FA2 worker) and updating node positions via payload.
-- Confidence-driven styling lives in `src/components/GraphCanvas.tsx`; adjust color/size mapping there.
+- **Layout:** `src/layout/runLayout.ts` (ForceAtlas2). Tune parameters here.
+- **Styling:** `src/components/GraphCanvas.tsx` handles node/edge visual attributes based on the store state.
 
 ### UI/inspector enhancements
-- UI root: `src/App.tsx`
-- Inspector shows label, module, file, confidence, and lazy detail warnings. Extend to show incident edges, source offsets, or snippets from `resolveNodeDetail`.
-- Add search/filter or neighborhood highlighting in `GraphCanvas.tsx` via Sigma events (`useRegisterEvents`).
-
-### State management
-- Store: `src/store/useGraphStore.ts`
-- Holds payload, Graphology instance, status, warnings, error, hover/selection. Add slices for filters or pinned nodes here.
+- **Root:** `src/App.tsx`
+- **State:** `src/store/useGraphStore.ts` holds the application state (filters, selection, payload).
 
 ### Testing
-- Vitest + React Testing Library + jsdom.
-- Key suites:
-  - `src/test/heuristics.test.ts` (module ID, confidence, lazy detail)
-  - `src/test/layout.test.ts` (ForceAtlas2 invocation)
-  - `src/test/app.test.tsx` (UI status/warning flows)
-  - `src/test/store.test.ts`, `src/test/worker-helpers.test.ts`
-- Mock heavy deps (Sigma/WebGL/FA2) to keep tests fast; add focused unit tests for new heuristics or layout logic.
+- **CLI Logic:** `src/cli/test/analysis.test.ts` covers the Node.js analysis pipeline.
+- **Frontend Logic:** `src/test/` contains tests for filters, heuristics (legacy), and components.
 
 ## Roadmap notes
-- Zip upload fallback (not yet implemented).
-- Richer lazy resolution (source snippets, lexical breadcrumbs).
-- Performance benchmarking on large bundles; consider layout offload to worker if UI stutters.
+- Add ability to export/import graph payloads (JSON).
+- Improve "virtual filesystem" visualization for unpacked modules.
+- Support for more bundlers beyond Webpack.

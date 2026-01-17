@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "./dist-cli",
+    "noEmit": false,
+    "skipLibCheck": true
+  },
+  "include": ["src/cli/**/*", "src/types/**/*"]
+}

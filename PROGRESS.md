@@ -49,6 +49,15 @@ Replaced heuristic-based noise filtering with structural de-bundling using `@wak
 - **Fallback**: Implemented robust fallback to raw file analysis if unpacking fails or yields no modules.
 - **Verification**: Verified functionality with new unit tests (`src/workers/analysis.worker.test.ts`) covering raw files, real bundles, and tag detection.
 
+## Phase 4: Migration to Node.js CLI Pipeline | 2026-01-16
+Refactored the application to move the analysis pipeline from the browser to a Node.js CLI environment (`js-lens serve <dir>`) to resolve runtime dynamic require issues with `@wakaru/unpacker`.
+- **Architecture**: Moved analysis logic from `src/workers` to `src/cli`, replacing browser APIs with Node.js `fs/promises`.
+- **CLI Server**: Created `src/cli/index.ts` using Express to serve the analysis API (`/api/graph`) and the static React frontend.
+- **Dependency Fix**: Implemented a global `require` shim and dynamic import pattern in the CLI entry point to handle `@wakaru/unpacker`'s browser-unfriendly build in a Node environment.
+- **Frontend Refactor**: Updated `App.tsx` to fetch data from the local API instead of using Web Workers and File System Access API.
+- **Verification**: Verified end-to-end functionality using Playwright and unit tests for the CLI logic.
+
 ### Next Steps & Continuity
-- Evaluate performance on very large bundles (>5MB) and optimize memory usage if needed.
-- Consider visualizing the "virtual filesystem" structure recovered by Wakaru in the UI.
+- Enhance the CLI with more commands (e.g., specific file analysis, export options).
+- Improve the frontend visualization to handle larger datasets served by the API.
+- Investigate better handling of large graphs in Sigma.js now that the backend can process larger projects.

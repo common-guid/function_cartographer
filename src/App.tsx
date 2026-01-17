@@ -1,9 +1,5 @@
-import { useMemo, useState, useEffect } from 'react'
-import * as Comlink from 'comlink'
+import { useState, useEffect } from 'react'
 import { GraphCanvas } from './components/GraphCanvas'
-import { openDirectory } from './services/fileSystem'
-import AnalysisWorker from './workers/analysis.worker?worker'
-import type { AnalysisWorker as AnalysisWorkerType } from './workers/analysis.worker'
 import { useGraphStore } from './store/useGraphStore'
 
 function App() {
@@ -17,35 +13,46 @@ function App() {
   const filters = useGraphStore((state) => state.filters)
   const setFilter = useGraphStore((state) => state.setFilter)
 
-  const workerApi = useMemo(() => {
-    const worker = new AnalysisWorker()
-    return Comlink.wrap<AnalysisWorkerType>(worker)
-  }, [])
-
-  const handleOpenProject = async () => {
-    try {
-      setLocalError(null)
+  useEffect(() => {
+    const fetchData = async () => {
       reset()
       setStatus('loading')
       setWarnings([])
-      const handle = await openDirectory()
-      const result = await workerApi.processDirectory(handle)
-      if (result.success) {
-        setPayload(result.data)
-        setWarnings(result.warnings)
-        setStatus('ready')
-      } else {
-        setError(result.error)
-        setWarnings(result.warnings)
+
+      try {
+        const response = await fetch('/api/graph')
+        if (response.status === 503) {
+            // Poll if analysis is in progress
+            // Simple retry for now, or just show loading
+            setTimeout(fetchData, 2000)
+            return
+        }
+
+        if (!response.ok) {
+            throw new Error(`Server returned ${response.status} ${response.statusText}`)
+        }
+
+        const result = await response.json()
+
+        if (result.success) {
+            setPayload(result.data)
+            setWarnings(result.warnings)
+            setStatus('ready')
+        } else {
+            setError(result.error)
+            setWarnings(result.warnings)
+            setStatus('error')
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        setLocalError(message)
+        setError(message)
         setStatus('error')
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      setLocalError(message)
-      setError(message)
-      setStatus('error')
     }
-  }
+
+    fetchData()
+  }, [reset, setStatus, setWarnings, setPayload, setError])
 
   const warnings = useGraphStore((state) => state.warnings)
   const status = useGraphStore((state) => state.status)
@@ -53,47 +60,14 @@ function App() {
   const selectedNodeId = useGraphStore((state) => state.selectedNode)
   const payload = useGraphStore((state) => state.payload)
   const selectedNode = payload?.nodes.find((n) => n.id === selectedNodeId)
-  const [detailWarning, setDetailWarning] = useState<string | null>(null)
   const totalNodes = payload?.nodes.length ?? 0
   const visibleNodes = graph?.order ?? 0
-
-  useEffect(() => {
-    const fetchDetail = async () => {
-      if (!selectedNodeId) return
-      try {
-        const res = await workerApi.resolveNodeDetail(selectedNodeId)
-        if (!res.success) {
-          setDetailWarning(res.error)
-        } else if (res.warnings.length) {
-          setDetailWarning(res.warnings.join('; '))
-        } else {
-          setDetailWarning(null)
-        }
-      } catch (err) {
-        setDetailWarning(err instanceof Error ? err.message : String(err))
-      }
-    }
-    fetchDetail()
-  }, [selectedNodeId, workerApi])
 
   return (
     <div className="relative w-screen h-screen overflow-hidden">
       <div className="absolute top-4 left-4 z-10 p-4 bg-gray-800/80 backdrop-blur rounded-lg border border-gray-700 text-white shadow-xl space-y-3">
         <h1 className="text-xl font-bold">JS-Flow-Lens</h1>
-        <button
-          onClick={handleOpenProject}
-          className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded transition-colors font-medium disabled:opacity-50"
-          disabled={status === 'loading'}
-        >
-          {status === 'loading' ? 'Processing...' : 'Open Project Directory'}
-        </button>
-        <button
-          className="w-full px-4 py-2 bg-gray-600 rounded opacity-70 cursor-not-allowed"
-          disabled
-          title="Zip upload fallback stub (not implemented yet)"
-        >
-          Zip upload (coming soon)
-        </button>
+
         <div className="text-sm space-y-1">
           <div className="font-semibold">Status: {status}</div>
           <div className="text-gray-300">
@@ -194,7 +168,6 @@ function App() {
           ) : (
             <div className="text-gray-300">Select a node in the graph to view details.</div>
           )}
-          {detailWarning && <div className="text-amber-300">{detailWarning}</div>}
         </div>
       </div>
 

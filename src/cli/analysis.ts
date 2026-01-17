@@ -1,6 +1,8 @@
-import * as Comlink from 'comlink'
+
 import * as acorn from 'acorn'
 import { unpack } from '@wakaru/unpacker'
+import fs from 'fs/promises'
+import path from 'path'
 import type {
   EdgePayload,
   GraphPayload,
@@ -8,14 +10,14 @@ import type {
   WorkerResult,
   Confidence,
   NodeType,
-} from '../types/graph'
+} from '../types/graph.js'
 
-type FileEntry = { handle: FileSystemFileHandle; path: string }
+type FileEntry = { path: string, relativePath: string, size: number }
 
 const MAX_PARSE_BYTES = 5_000_000 // safety cap; warn if exceeded
 
-export function moduleIdFromPath(path: string) {
-  return path.replace(/\.js$/i, '')
+export function moduleIdFromPath(p: string) {
+  return p.replace(/\.js$/i, '')
 }
 
 export function detectModuleIdFromSnippet(snippet: string): string | undefined {
@@ -25,9 +27,10 @@ export function detectModuleIdFromSnippet(snippet: string): string | undefined {
   if (rollup?.[1]) return rollup[1]
   return undefined
 }
-export function detectTags(path: string, snippet: string): NodeType[] {
+
+export function detectTags(p: string, snippet: string): NodeType[] {
   const tags: NodeType[] = []
-  const lowerPath = path.toLowerCase()
+  const lowerPath = p.toLowerCase()
   const isVendor =
     lowerPath.includes('node_modules') ||
     lowerPath.includes('vendor') ||
@@ -82,18 +85,21 @@ export function stringifyCallee(node: any): string | null {
 }
 
 async function collectJsFiles(
-  dir: FileSystemDirectoryHandle,
-  prefix = '',
+  dir: string,
+  rootDir: string
 ): Promise<FileEntry[]> {
   const results: FileEntry[] = []
-  // @ts-ignore - FileSystemDirectoryHandle.values() is standard but TS may lag
-  for await (const entry of dir.values()) {
-    const path = `${prefix}${entry.name}`
-    if (entry.kind === 'file' && entry.name.endsWith('.js')) {
-      results.push({ handle: entry, path })
-    } else if (entry.kind === 'directory') {
-      const nested = await collectJsFiles(entry, `${path}/`)
+  const entries = await fs.readdir(dir, { withFileTypes: true })
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      const nested = await collectJsFiles(fullPath, rootDir)
       results.push(...nested)
+    } else if (entry.isFile() && entry.name.endsWith('.js')) {
+      const stats = await fs.stat(fullPath)
+      const relativePath = path.relative(rootDir, fullPath)
+      results.push({ path: fullPath, relativePath, size: stats.size })
     }
   }
   return results
@@ -106,25 +112,11 @@ interface ModuleContext {
   moduleId?: string
 }
 
-export class AnalysisWorker {
-  private lastPayload: GraphPayload | null = null
-
-  async resolveNodeDetail(nodeId: string): Promise<WorkerResult> {
-    if (!this.lastPayload) {
-      return { success: false, error: 'No analysis run yet', warnings: [] }
-    }
-    const node = this.lastPayload.nodes.find((n) => n.id === nodeId)
-    if (!node) {
-      return { success: false, error: `Node ${nodeId} not found`, warnings: [] }
-    }
-    const edges = this.lastPayload.edges.filter((e) => e.source === nodeId || e.target === nodeId)
-    return { success: true, data: { nodes: [node], edges }, warnings: [] }
-  }
-
-  async processDirectory(handle: FileSystemDirectoryHandle): Promise<WorkerResult> {
+export class Analyzer {
+  async processDirectory(dirPath: string): Promise<WorkerResult> {
     const warnings: string[] = []
     try {
-      const files = await collectJsFiles(handle)
+      const files = await collectJsFiles(dirPath, dirPath)
       if (!files.length) {
         warnings.push('No .js bundles discovered in the selected directory')
         return { success: false, error: 'No JS bundles found', warnings }
@@ -159,15 +151,13 @@ export class AnalysisWorker {
       }
 
       for (const fileEntry of files) {
-        const file = await fileEntry.handle.getFile()
-
-        if (file.size > MAX_PARSE_BYTES) {
+        if (fileEntry.size > MAX_PARSE_BYTES) {
           warnings.push(
-            `${fileEntry.path} exceeds ${MAX_PARSE_BYTES} bytes; analysis may be partial`,
+            `${fileEntry.relativePath} exceeds ${MAX_PARSE_BYTES} bytes; analysis may be partial`,
           )
         }
 
-        const code = await file.text()
+        const code = await fs.readFile(fileEntry.path, 'utf-8')
 
         // Attempt to unpack first
         let unpackedModules: any[] = []
@@ -176,16 +166,16 @@ export class AnalysisWorker {
             if (result) unpackedModules = result.modules
         } catch (err) {
             console.warn('De-bundling failed, analyzing raw file', err)
-            warnings.push(`${fileEntry.path}: de-bundling failed, fallback to raw`)
+            warnings.push(`${fileEntry.relativePath}: de-bundling failed, fallback to raw`)
         }
 
         // Always create a node for the physical file
-        const fileTags = detectTags(fileEntry.path, code.slice(0, 1000))
-        const fileNodeId = `file:${fileEntry.path}`
-        addNode(fileNodeId, fileEntry.path, {
-             moduleId: moduleIdFromPath(fileEntry.path),
-             file: fileEntry.path,
-             size: file.size,
+        const fileTags = detectTags(fileEntry.relativePath, code.slice(0, 1000))
+        const fileNodeId = `file:${fileEntry.relativePath}`
+        addNode(fileNodeId, fileEntry.relativePath, {
+             moduleId: moduleIdFromPath(fileEntry.relativePath),
+             file: fileEntry.relativePath,
+             size: fileEntry.size,
              confidence: 'medium',
              tags: fileTags,
         })
@@ -196,7 +186,7 @@ export class AnalysisWorker {
                 // Determine tags based on module path AND original file path
                 const pathStr = mod.path ?? ''
 
-                const isVendorFile = fileEntry.path.includes('node_modules') || fileEntry.path.includes('vendor')
+                const isVendorFile = fileEntry.relativePath.includes('node_modules') || fileEntry.relativePath.includes('vendor')
                 const isVendorModule = pathStr.includes('node_modules') || pathStr.startsWith('vendor')
 
                 const isVendor = isVendorFile || isVendorModule
@@ -204,11 +194,8 @@ export class AnalysisWorker {
 
                 // Prefix node IDs with the bundle name to avoid collisions
                 // If pathStr is empty, we treat it as the file itself.
-                const uniquePath = pathStr ? `${fileEntry.path}::${pathStr}` : fileEntry.path
+                const uniquePath = pathStr ? `${fileEntry.relativePath}::${pathStr}` : fileEntry.relativePath
 
-                // Analyze the unpacked module code
-                // We do NOT pass fileNodeId here, so each virtual module gets its own container node (file:uniquePath)
-                // If uniquePath == fileEntry.path, it naturally maps to the physical file node.
                 this.analyzeModule({
                     path: uniquePath,
                     code: mod.code,
@@ -218,10 +205,10 @@ export class AnalysisWorker {
             }
         } else {
              // Fallback: Raw analysis
-             const moduleId = detectModuleIdFromSnippet(code.slice(0, 2000)) ?? moduleIdFromPath(fileEntry.path)
+             const moduleId = detectModuleIdFromSnippet(code.slice(0, 2000)) ?? moduleIdFromPath(fileEntry.relativePath)
 
              this.analyzeModule({
-                 path: fileEntry.path,
+                 path: fileEntry.relativePath,
                  code,
                  tags: fileTags,
                  moduleId
@@ -234,7 +221,6 @@ export class AnalysisWorker {
         edges,
       }
 
-      this.lastPayload = payload
       return { success: true, data: payload, warnings }
     } catch (error) {
       warnings.push(String(error))
@@ -251,7 +237,7 @@ export class AnalysisWorker {
   ) {
     const parseResult = this.safeParse(ctx.code)
     if (!parseResult.ok) {
-      warnings.push(`${ctx.path}: parse failed (${parseResult.reason})`)
+      warnings.push(`${ctx.path}: parse failed (${(parseResult as any).reason})`)
       return
     }
 
@@ -259,18 +245,6 @@ export class AnalysisWorker {
     const ctxStack: string[] = []
     const fileNodeId = parentNodeId ?? `file:${ctx.path}`
 
-    // If we are analyzing a virtual module, we might want to represent the module itself as a node if it's not the file node?
-    // In the raw analysis, `fileNodeId` was added before analyzeModule.
-    // In unpacked analysis, we iterate modules. The `addNode` calls inside `visit` will create function nodes.
-    // We should ensure the module itself is linked or represented if necessary, but the current logic mainly focuses on functions/variables.
-    // However, for correct edge creation, we need a base node ID if the stack is empty.
-
-    // In unpacked mode, parentNodeId is undefined, so fileNodeId becomes `file:${ctx.path}` (e.g., `file:bundle.js::node_modules/foo/index.js`).
-    // We should probably ensure this "file" node exists so function nodes can link to it if needed, or at least it serves as a container.
-    // But the original code only added the file node once per file.
-    // For unpacked modules, each module effectively becomes a "file".
-
-    // Let's add a node for the module/file if it doesn't exist, to support the graph structure
      addNode(fileNodeId, ctx.path, {
         moduleId: ctx.moduleId ?? moduleIdFromPath(ctx.path),
         file: ctx.path,
@@ -423,5 +397,3 @@ export class AnalysisWorker {
     }
   }
 }
-
-Comlink.expose(new AnalysisWorker())

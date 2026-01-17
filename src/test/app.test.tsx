@@ -1,60 +1,63 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-
-const processDirectory = vi.fn()
-const resolveNodeDetail = vi.fn().mockResolvedValue({ success: true, data: { nodes: [], edges: [] }, warnings: [] })
-
-vi.mock('../services/fileSystem', () => ({
-  openDirectory: vi.fn().mockResolvedValue({ mock: true }),
-}))
-
-vi.mock('comlink', () => ({
-  wrap: () => ({ processDirectory, resolveNodeDetail }),
-  expose: vi.fn(),
-}))
-
-vi.mock('../workers/analysis.worker?worker', () => {
-  return { default: class MockWorker {} }
-})
-
-vi.mock('../components/GraphCanvas', () => ({
-  GraphCanvas: () => <div data-testid="graph-canvas" />,
-}))
-
-// Import App after mocks so mocks apply to its dependencies
 import App from '../App'
+import { useGraphStore } from '../store/useGraphStore'
+
+// Mock SigmaContainer to avoid canvas requirements but render children
+// This allows GraphLoader to run and we can catch the infinite loop regression
+vi.mock('@react-sigma/core', () => ({
+  SigmaContainer: ({ children, style }: any) => <div data-testid="sigma-container" style={style}>{children}</div>,
+  useLoadGraph: () => vi.fn(),
+  useRegisterEvents: () => vi.fn(),
+}))
+
+// Mock fetch
+global.fetch = vi.fn()
 
 describe('App', () => {
   beforeEach(() => {
-    processDirectory.mockReset()
+    useGraphStore.getState().reset()
+    vi.clearAllMocks()
   })
 
-  it('shows ready status after successful worker result', async () => {
-    processDirectory.mockResolvedValue({
-      success: true,
-      warnings: ['w1'],
-      data: { nodes: [], edges: [] },
+  it('renders and loads graph without infinite loop', async () => {
+     (global.fetch as any).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: { nodes: [{id: 'n1', label: 'N1', confidence: 'high', tags: []}], edges: [] },
+        warnings: ['w1'],
+      }),
     })
 
     render(<App />)
 
-    await userEvent.click(screen.getByRole('button', { name: /open project/i }))
+    // Should start loading
+    expect(screen.getByText(/Status: loading/i)).toBeInTheDocument()
 
-    await waitFor(() => expect(screen.getByText(/status: ready/i)).toBeInTheDocument())
+    // Should eventually be ready
+    await waitFor(() => expect(screen.getByText(/Status: ready/i)).toBeInTheDocument())
+
+    // Check for content
     expect(screen.getByText(/w1/)).toBeInTheDocument()
+    // Check if graph canvas (mocked sigma) is present
+    expect(screen.getByTestId('sigma-container')).toBeInTheDocument()
   })
 
-  it('shows error when worker fails', async () => {
-    processDirectory.mockResolvedValue({
-      success: false,
-      error: 'fail',
-      warnings: [],
+  it('shows error when API fails', async () => {
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: false,
+        error: 'fail',
+        warnings: [],
+      }),
     })
 
     render(<App />)
-    await userEvent.click(screen.getByRole('button', { name: /open project/i }))
 
-    await waitFor(() => expect(screen.getByText(/error: fail/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Error: fail/i)).toBeInTheDocument())
   })
 })
