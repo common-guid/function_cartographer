@@ -18,3 +18,5 @@ Created comprehensive test coverage for filter feature: detectTags heuristics (2
 Integrated `@wakaru/unpacker` for structural de-bundling in the analysis worker, allowing precise tagging of vendor modules and falling back to raw analysis.
 ## Migration to Node.js CLI Pipeline | 2026-01-16
 Moved analysis from browser worker to a Node.js CLI (`js-lens serve`) to solve `@wakaru/unpacker` dynamic require issues. Created a server-side analysis pipeline using Express, handled the dependency constraints with a custom require shim, and refactored the frontend to consume the API.
+## Fix Render Loop in GraphCanvas | 2026-01-17
+Resolved a "Maximum update depth exceeded" error by memoizing `GraphCanvas` and its style object, breaking an infinite render loop between the `GraphLoader` effect and the global store. Updated `app.test.tsx` to include regression testing for this scenario.
