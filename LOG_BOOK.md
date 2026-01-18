@@ -1,3 +1,5 @@
+## CLI UI rebuild guard | 2026-01-17
+Added stale UI detection in the CLI serve command to auto-rebuild the Vite frontend when dist is missing or outdated, preventing React #185 from old bundles. Added unit tests for the staleness check.
 ## Test suite stabilization | 2026-01-14
 Implemented Vitest + RTL + jsdom suite, mocked WebGL graph canvas, fixed store selector instability in App, and verified all tests pass (3 files, 10 tests).
 ## Heuristic tests | 2026-01-14

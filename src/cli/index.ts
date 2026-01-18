@@ -12,6 +12,7 @@ import cors from 'cors'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { program } from 'commander'
+import { ensureUiBuild } from './uiBuild'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -25,6 +26,7 @@ program
   .command('serve <dir>')
   .description('Analyze a directory and serve the visualization')
   .option('-p, --port <number>', 'Port to run the server on', '3000')
+  .option('--no-build-ui', 'Skip rebuilding the UI when dist is missing or stale')
   .action(async (dir, options) => {
     // Dynamic import to ensure global.require is set before Analyzer is imported/executed
     const { Analyzer } = await import('./analysis.js');
@@ -58,8 +60,18 @@ program
       }
     })
 
+    const projectRoot = path.resolve(__dirname, '../..')
+    if (options.buildUi) {
+      try {
+        await ensureUiBuild(projectRoot)
+      } catch (err) {
+        console.error('UI build failed:', err)
+        process.exit(1)
+      }
+    }
+
     // Serve static files from the 'dist' directory
-    const distPath = path.join(__dirname, '../../dist')
+    const distPath = path.join(projectRoot, 'dist')
 
     app.use(express.static(distPath))
 
