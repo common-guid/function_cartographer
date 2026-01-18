@@ -1,6 +1,7 @@
 
 import * as acorn from 'acorn'
 import { unpack } from '@wakaru/unpacker'
+import { humanifyCode, type HumanifyOptions } from 'humanifyjs/lib'
 import fs from 'fs/promises'
 import path from 'path'
 import type {
@@ -112,8 +113,13 @@ interface ModuleContext {
   moduleId?: string
 }
 
+export interface AnalyzerOptions extends HumanifyOptions {
+    enabled?: boolean;
+    scope?: string;
+}
+
 export class Analyzer {
-  async processDirectory(dirPath: string): Promise<WorkerResult> {
+  async processDirectory(dirPath: string, options?: AnalyzerOptions): Promise<WorkerResult> {
     const warnings: string[] = []
     try {
       const files = await collectJsFiles(dirPath, dirPath)
@@ -196,9 +202,23 @@ export class Analyzer {
                 // If pathStr is empty, we treat it as the file itself.
                 const uniquePath = pathStr ? `${fileEntry.relativePath}::${pathStr}` : fileEntry.relativePath
 
+                let moduleCode = mod.code;
+                if (options?.enabled) {
+                    const shouldHumanify = options.scope === 'all' || tags.includes('source');
+                    if (shouldHumanify) {
+                        try {
+                            console.log(`Humanifying ${uniquePath}...`);
+                            moduleCode = await humanifyCode(moduleCode, options);
+                        } catch (err) {
+                            console.error(`Humanify failed for ${uniquePath}:`, err);
+                            warnings.push(`${uniquePath}: humanify failed, using original code`);
+                        }
+                    }
+                }
+
                 this.analyzeModule({
                     path: uniquePath,
-                    code: mod.code,
+                    code: moduleCode,
                     tags,
                     moduleId: moduleIdFromPath(uniquePath)
                 }, addNode, addEdge, warnings)
@@ -207,9 +227,23 @@ export class Analyzer {
              // Fallback: Raw analysis
              const moduleId = detectModuleIdFromSnippet(code.slice(0, 2000)) ?? moduleIdFromPath(fileEntry.relativePath)
 
+             let fileCode = code;
+             if (options?.enabled) {
+                 const shouldHumanify = options.scope === 'all' || fileTags.includes('source');
+                 if (shouldHumanify) {
+                     try {
+                         console.log(`Humanifying ${fileEntry.relativePath}...`);
+                         fileCode = await humanifyCode(fileCode, options);
+                     } catch (err) {
+                         console.error(`Humanify failed for ${fileEntry.relativePath}:`, err);
+                         warnings.push(`${fileEntry.relativePath}: humanify failed, using original code`);
+                     }
+                 }
+             }
+
              this.analyzeModule({
                  path: fileEntry.relativePath,
-                 code,
+                 code: fileCode,
                  tags: fileTags,
                  moduleId
              }, addNode, addEdge, warnings, fileNodeId)

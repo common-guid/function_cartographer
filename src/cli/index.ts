@@ -12,7 +12,11 @@ import cors from 'cors'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { program } from 'commander'
-import { ensureUiBuild } from './uiBuild'
+import dotenv from 'dotenv'
+import { ensureUiBuild } from './uiBuild.js'
+
+// Load environment variables from .env file
+dotenv.config()
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -27,6 +31,8 @@ program
   .description('Analyze a directory and serve the visualization')
   .option('-p, --port <number>', 'Port to run the server on', '3000')
   .option('--no-build-ui', 'Skip rebuilding the UI when dist is missing or stale')
+  .option('--humanify', 'Enable LLM-based humanification (requires API key)')
+  .option('--humanify-scope <scope>', 'Scope of humanification: "source" (default) or "all"', 'source')
   .action(async (dir, options) => {
     // Dynamic import to ensure global.require is set before Analyzer is imported/executed
     const { Analyzer } = await import('./analysis.js');
@@ -42,10 +48,23 @@ program
     const analyzer = new Analyzer()
     let cachedResult: any = null
 
+    // Configure Humanify options
+    const humanifyOptions = options.humanify ? {
+      enabled: true,
+      scope: options.humanifyScope,
+      apiKey: process.env.HUMANIFY_OPENROUTER_API_KEY,
+      model: process.env.HUMANIFY_PLUS_MODEL
+    } : undefined;
+
+    if (humanifyOptions?.enabled && !humanifyOptions.apiKey) {
+      console.error('Error: --humanify is enabled but HUMANIFY_OPENROUTER_API_KEY is missing in environment variables or .env file.');
+      process.exit(1);
+    }
+
     // Run analysis immediately
     try {
       console.log('Starting analysis...')
-      cachedResult = await analyzer.processDirectory(targetDir)
+      cachedResult = await analyzer.processDirectory(targetDir, humanifyOptions)
       console.log('Analysis complete.')
     } catch (err) {
       console.error('Analysis failed:', err)
