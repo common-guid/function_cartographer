@@ -40,8 +40,27 @@ npm run dev:cli -- serve /path/to/your/bundles
 
 Options:
 - `-p, --port <number>`: Port to run the server on (default: 3000).
+- `--no-build-ui`: Skip rebuilding the UI when `dist/` is missing or stale.
+- `--humanify`: Enable LLM-based humanification via humanify-plus (requires API key).
+- `--humanify-scope <scope>`: Humanify scope: `source` (default) or `all` (includes vendor).
 
 Open your browser to `http://localhost:3000` (or the specified port).
+
+#### Humanify (LLM-assisted renaming)
+To enable humanification, set the OpenRouter API key and pass `--humanify`:
+
+```bash
+export HUMANIFY_OPENROUTER_API_KEY=your_key
+./dist-cli/index.js serve /path/to/your/bundles --humanify --humanify-scope source
+```
+
+Optional: override the default model with `HUMANIFY_PLUS_MODEL`:
+
+```bash
+export HUMANIFY_OPENROUTER_API_KEY=your_key
+export HUMANIFY_PLUS_MODEL=anthropic/claude-3.5-sonnet
+./dist-cli/index.js serve /path/to/your/bundles --humanify --humanify-scope all
+```
 
 ### Development Mode
 

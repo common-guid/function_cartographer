@@ -1,3 +1,5 @@
+## README humanify-plus usage update | 2026-01-18
+Documented new CLI flags and environment variables for humanify-plus in the README usage section, including examples for enabling and scoping humanification.
 ## CLI UI rebuild guard | 2026-01-17
 Added stale UI detection in the CLI serve command to auto-rebuild the Vite frontend when dist is missing or outdated, preventing React #185 from old bundles. Added unit tests for the staleness check.
 ## Test suite stabilization | 2026-01-14
