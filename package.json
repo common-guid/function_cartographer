@@ -30,6 +30,7 @@
     "graphology-layout-forceatlas2": "^0.10.1",
     "humanifyjs": "file:humanify-plus",
     "lucide-react": "^0.562.0",
+    "prettier": "^3.8.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "sigma": "^3.0.2",

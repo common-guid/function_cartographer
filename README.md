@@ -62,6 +62,14 @@ export HUMANIFY_PLUS_MODEL=anthropic/claude-3.5-sonnet
 ./dist-cli/index.js serve /path/to/your/bundles --humanify --humanify-scope all
 ```
 
+#### Archiving Processed Files
+When running the CLI against the project's `sample_js-files` directory (e.g. `js-lens serve sample_js-files`), the tool enables an **archiving mode**:
+- **Output:** Processed (humanified or beautified) files are written to `processed/output/`.
+- **Archive:** Original input files are moved to `processed/sample_js-files/`.
+- **Duplicates:** If a file has already been processed (exists in output), the input file is moved to `processed/dupes/` to avoid reprocessing.
+- **Relative Paths:** The directory structure is preserved in all target directories.
+- **Consistency:** Unpacking is disabled in this mode to ensure the archived file maps 1-to-1 with the input file, allowing consistent re-analysis of the archived output.
+
 ### Development Mode
 
 1. **Start the Frontend Dev Server:**
