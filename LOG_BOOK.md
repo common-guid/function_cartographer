@@ -24,3 +24,5 @@ Integrated `@wakaru/unpacker` for structural de-bundling in the analysis worker,
 Moved analysis from browser worker to a Node.js CLI (`js-lens serve`) to solve `@wakaru/unpacker` dynamic require issues. Created a server-side analysis pipeline using Express, handled the dependency constraints with a custom require shim, and refactored the frontend to consume the API.
 ## Fix Render Loop in GraphCanvas | 2026-01-17
 Resolved a "Maximum update depth exceeded" error by memoizing `GraphCanvas` and its style object, breaking an infinite render loop between the `GraphLoader` effect and the global store. Updated `app.test.tsx` to include regression testing for this scenario.
+## Archive Humanify Output | 2026-01-18
+Added an archiving mode to the CLI that activates when analyzing `sample_js-files`, enabling persistent storage of humanified/beautified outputs in `processed/output` and archiving input bundles to prevent reprocessing. Implemented safe file moves, duplicate handling, and a fallback beautifier using Prettier for vendor code.
