@@ -3,6 +3,7 @@ import { unpack } from '@wakaru/unpacker';
 import { humanifyCode } from 'humanifyjs/lib';
 import fs from 'fs/promises';
 import path from 'path';
+import { beautify } from './beautify.js';
 const MAX_PARSE_BYTES = 5_000_000; // safety cap; warn if exceeded
 export function moduleIdFromPath(p) {
     return p.replace(/\.js$/i, '');
@@ -119,17 +120,64 @@ export class Analyzer {
                 if (fileEntry.size > MAX_PARSE_BYTES) {
                     warnings.push(`${fileEntry.relativePath} exceeds ${MAX_PARSE_BYTES} bytes; analysis may be partial`);
                 }
-                const code = await fs.readFile(fileEntry.path, 'utf-8');
+                let code;
+                let skipUnpack = options?.disableUnpacking ?? false;
+                let shouldWriteOutput = false;
+                let destForInput = null;
+                let usedCachedOutput = false;
+                if (options?.postProcess?.enabled) {
+                    const relPath = fileEntry.relativePath;
+                    const outputPath = path.join(options.postProcess.outputDir, relPath);
+                    let outputExists = false;
+                    try {
+                        await fs.access(outputPath);
+                        outputExists = true;
+                    }
+                    catch {
+                        // ignore
+                    }
+                    if (outputExists) {
+                        console.log(`Using cached output for ${relPath}`);
+                        code = await fs.readFile(outputPath, 'utf-8');
+                        skipUnpack = true;
+                        usedCachedOutput = true;
+                        const archivePath = path.join(options.postProcess.archiveDir, relPath);
+                        let archiveExists = false;
+                        try {
+                            await fs.access(archivePath);
+                            archiveExists = true;
+                        }
+                        catch {
+                            // ignore
+                        }
+                        if (archiveExists) {
+                            destForInput = path.join(options.postProcess.dupesDir, relPath);
+                        }
+                        else {
+                            destForInput = archivePath;
+                        }
+                    }
+                    else {
+                        code = await fs.readFile(fileEntry.path, 'utf-8');
+                        shouldWriteOutput = true;
+                        destForInput = path.join(options.postProcess.archiveDir, relPath);
+                    }
+                }
+                else {
+                    code = await fs.readFile(fileEntry.path, 'utf-8');
+                }
                 // Attempt to unpack first
                 let unpackedModules = [];
-                try {
-                    const result = await unpack(code);
-                    if (result)
-                        unpackedModules = result.modules;
-                }
-                catch (err) {
-                    console.warn('De-bundling failed, analyzing raw file', err);
-                    warnings.push(`${fileEntry.relativePath}: de-bundling failed, fallback to raw`);
+                if (!skipUnpack) {
+                    try {
+                        const result = await unpack(code);
+                        if (result)
+                            unpackedModules = result.modules;
+                    }
+                    catch (err) {
+                        console.warn('De-bundling failed, analyzing raw file', err);
+                        warnings.push(`${fileEntry.relativePath}: de-bundling failed, fallback to raw`);
+                    }
                 }
                 // Always create a node for the physical file
                 const fileTags = detectTags(fileEntry.relativePath, code.slice(0, 1000));
@@ -179,17 +227,49 @@ export class Analyzer {
                     // Fallback: Raw analysis
                     const moduleId = detectModuleIdFromSnippet(code.slice(0, 2000)) ?? moduleIdFromPath(fileEntry.relativePath);
                     let fileCode = code;
+                    let finalCodeForOutput = code;
                     if (options?.enabled) {
                         const shouldHumanify = options.scope === 'all' || fileTags.includes('source');
-                        if (shouldHumanify) {
+                        if (shouldHumanify && !usedCachedOutput) {
                             try {
                                 console.log(`Humanifying ${fileEntry.relativePath}...`);
                                 fileCode = await humanifyCode(fileCode, options);
+                                finalCodeForOutput = fileCode;
                             }
                             catch (err) {
                                 console.error(`Humanify failed for ${fileEntry.relativePath}:`, err);
                                 warnings.push(`${fileEntry.relativePath}: humanify failed, using original code`);
                             }
+                        }
+                        else if (shouldWriteOutput && !usedCachedOutput) {
+                            // Fallback to beautify if humanification is skipped (e.g. vendor file)
+                            finalCodeForOutput = await beautify(fileCode);
+                            fileCode = finalCodeForOutput;
+                        }
+                    }
+                    else if (shouldWriteOutput) {
+                        // Format with prettier if humanify is disabled but we are archiving
+                        finalCodeForOutput = await beautify(fileCode);
+                        fileCode = finalCodeForOutput;
+                    }
+                    if (shouldWriteOutput && options?.postProcess?.enabled) {
+                        const outputPath = path.join(options.postProcess.outputDir, fileEntry.relativePath);
+                        try {
+                            await fs.mkdir(path.dirname(outputPath), { recursive: true });
+                            await fs.writeFile(outputPath, finalCodeForOutput);
+                        }
+                        catch (err) {
+                            warnings.push(`Failed to write output for ${fileEntry.relativePath}: ${err}`);
+                            destForInput = null; // Prevent move if write failed
+                        }
+                    }
+                    if (destForInput && options?.postProcess?.enabled) {
+                        try {
+                            await fs.mkdir(path.dirname(destForInput), { recursive: true });
+                            await fs.rename(fileEntry.path, destForInput);
+                        }
+                        catch (err) {
+                            warnings.push(`Failed to move input for ${fileEntry.relativePath}: ${err}`);
                         }
                     }
                     this.analyzeModule({

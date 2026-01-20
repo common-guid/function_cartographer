@@ -4,15 +4,16 @@
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "js-lens": "./dist-cli/index.js"
+    "js-lens": "./dist-cli/cli/index.js"
   },
   "scripts": {
     "dev": "vite",
     "dev:cli": "tsx src/cli/index.ts",
-    "build": "tsc -b && vite build",
+    "build": "npm run build:cli && npm run build:ui",
+    "build:ui": "tsc -b && vite build",
     "build:cli": "tsc -p tsconfig.cli.json",
     "lint": "eslint .",
-    "preview": "vite preview",
+    "preview": "node ./dist-cli/cli/index.js serve ./sample_js-files",
     "test": "vitest",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage"
