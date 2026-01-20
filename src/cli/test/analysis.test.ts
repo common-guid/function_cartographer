@@ -175,7 +175,7 @@ describe('Analysis Logic', () => {
               disableUnpacking: true
           }
 
-          const result = await analyzer.processDirectory(inputDir, options)
+          await analyzer.processDirectory(inputDir, options)
 
           // Should read CACHED content
           const expectedOutputPath = path.join(outputDir, 'main.js')
