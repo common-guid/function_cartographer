@@ -54,12 +54,16 @@ export HUMANIFY_OPENROUTER_API_KEY=your_key
 ./dist-cli/index.js serve /path/to/your/bundles --humanify --humanify-scope source
 ```
 
-Optional: override the default model with `HUMANIFY_PLUS_MODEL`:
+**Configuration Environment Variables:**
+- `HUMANIFY_OPENROUTER_API_KEY`: Your OpenRouter API key.
+- `HUMANIFY_PLUS_MODEL`: (Optional) Override default model (default: `x-ai/grok-4.1-fast`).
+- `HUMANIFY_CONCURRENCY`: (Optional) Control the number of files processed in parallel (default: `5`).
+
+Example using concurrency control:
 
 ```bash
-export HUMANIFY_OPENROUTER_API_KEY=your_key
-export HUMANIFY_PLUS_MODEL=anthropic/claude-3.5-sonnet
-./dist-cli/index.js serve /path/to/your/bundles --humanify --humanify-scope all
+export HUMANIFY_CONCURRENCY=10
+./dist-cli/index.js serve /path/to/your/bundles --humanify
 ```
 
 #### Archiving Processed Files
