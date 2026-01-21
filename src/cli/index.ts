@@ -54,7 +54,8 @@ program
       enabled: true,
       scope: options.humanifyScope,
       apiKey: process.env.HUMANIFY_OPENROUTER_API_KEY,
-      model: process.env.HUMANIFY_PLUS_MODEL
+      model: process.env.HUMANIFY_PLUS_MODEL,
+      concurrency: process.env.HUMANIFY_CONCURRENCY ? parseInt(process.env.HUMANIFY_CONCURRENCY, 10) : 5
     } : {};
 
     if (analyzerOptions.enabled && !analyzerOptions.apiKey) {
