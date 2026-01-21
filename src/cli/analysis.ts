@@ -327,8 +327,13 @@ export class Analyzer {
                     const shouldHumanify = options.scope === 'all' || tags.includes('source');
                     if (shouldHumanify) {
                         try {
-                            console.log(`Humanifying ${uniquePath}...`);
-                            moduleCode = await humanifyCode(moduleCode, options);
+                            console.log(`Start Humanifying ${uniquePath}`);
+                            const concurrency = options.concurrency ?? 1;
+                            moduleCode = await humanifyCode(moduleCode, {
+                                ...options,
+                                onProgress: concurrency > 1 ? () => {} : undefined
+                            });
+                            console.log(`Finished Humanifying ${uniquePath}`);
                         } catch (err) {
                             console.error(`Humanify failed for ${uniquePath}:`, err);
                             warnings.push(`${uniquePath}: humanify failed, using original code`);
@@ -354,8 +359,13 @@ export class Analyzer {
                  const shouldHumanify = options.scope === 'all' || fileTags.includes('source');
                  if (shouldHumanify && !usedCachedOutput) {
                      try {
-                         console.log(`Humanifying ${fileEntry.relativePath}...`);
-                         fileCode = await humanifyCode(fileCode, options);
+                         console.log(`Start Humanifying ${fileEntry.relativePath}`);
+                         const concurrency = options.concurrency ?? 1;
+                         fileCode = await humanifyCode(fileCode, {
+                             ...options,
+                             onProgress: concurrency > 1 ? () => {} : undefined
+                         });
+                         console.log(`Finished Humanifying ${fileEntry.relativePath}`);
                          finalCodeForOutput = fileCode
                      } catch (err) {
                          console.error(`Humanify failed for ${fileEntry.relativePath}:`, err);

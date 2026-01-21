@@ -147,7 +147,7 @@ describe('Analysis Logic', () => {
                 },
                 disableUnpacking: true
             };
-            await analyzer.processDirectory(inputDir, options);
+            const result = await analyzer.processDirectory(inputDir, options);
             // Should read CACHED content
             const expectedOutputPath = path.join(outputDir, 'main.js');
             expect(mockReadFile).toHaveBeenCalledWith(expectedOutputPath, 'utf-8');

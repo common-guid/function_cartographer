@@ -1,5 +1,5 @@
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { Analyzer } from './analysis.js'
 import * as humanifyLib from 'humanifyjs/lib'
 import fs from 'fs/promises'
@@ -13,6 +13,7 @@ vi.mock('humanifyjs/lib', () => ({
 
 describe('Analyzer with Humanify', () => {
   const mockDir = '/mock/dir'
+  const mockFile = path.join(mockDir, 'test.js')
   const mockCode = 'function a() { return 1; }'
 
   beforeEach(() => {
@@ -56,6 +57,7 @@ describe('Analyzer with Humanify', () => {
   })
 
   it('should NOT call humanifyCode for vendor files if scope is source', async () => {
+    const vendorFile = path.join(mockDir, 'node_modules', 'lib.js')
     vi.mocked(fs.readdir).mockResolvedValue([
         { name: 'node_modules', isDirectory: () => true, isFile: () => false } as any
     ])
@@ -86,6 +88,8 @@ describe('Analyzer with Humanify', () => {
   it('should call humanifyCode for vendor files if scope is all', async () => {
      // Setup similar to above but with scope 'all'
      const vendorDir = path.join(mockDir, 'node_modules')
+     const vendorFile = path.join(vendorDir, 'lib.js')
+
      vi.mocked(fs.readdir).mockImplementation(async (dir) => {
          if (dir === mockDir) return [{ name: 'node_modules', isDirectory: () => true, isFile: () => false } as any]
          if (dir === vendorDir) return [{ name: 'lib.js', isDirectory: () => false, isFile: () => true } as any]

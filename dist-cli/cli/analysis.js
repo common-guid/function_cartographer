@@ -81,6 +81,22 @@ async function collectJsFiles(dir, rootDir) {
     }
     return results;
 }
+async function runInBatch(items, limit, fn) {
+    const results = [];
+    const executing = [];
+    for (const item of items) {
+        const p = Promise.resolve().then(() => fn(item));
+        results.push(p);
+        const e = p.then(() => {
+            executing.splice(executing.indexOf(e), 1);
+        });
+        executing.push(e);
+        if (executing.length >= limit) {
+            await Promise.race(executing);
+        }
+    }
+    return Promise.all(results);
+}
 export class Analyzer {
     async processDirectory(dirPath, options) {
         const warnings = [];
@@ -93,191 +109,21 @@ export class Analyzer {
             const nodeMap = new Map();
             const edgeSet = new Set();
             const edges = [];
-            // Helper to add nodes/edges from anywhere
-            const addNode = (id, label, meta) => {
-                if (!nodeMap.has(id)) {
-                    // Defaults if not provided in meta
-                    const defaultTags = ['source'];
-                    nodeMap.set(id, {
-                        id,
-                        label,
-                        moduleId: '',
-                        file: '',
-                        confidence: 'medium',
-                        tags: defaultTags,
-                        ...meta,
-                    });
-                }
-            };
-            const addEdge = (source, target, weak = false, confidence = 'medium') => {
-                const key = `${source}->${target}${weak ? ':w' : ''}`;
-                if (edgeSet.has(key))
-                    return;
-                edgeSet.add(key);
-                edges.push({ source, target, weak, confidence: weak ? 'low' : confidence });
-            };
-            for (const fileEntry of files) {
-                if (fileEntry.size > MAX_PARSE_BYTES) {
-                    warnings.push(`${fileEntry.relativePath} exceeds ${MAX_PARSE_BYTES} bytes; analysis may be partial`);
-                }
-                let code;
-                let skipUnpack = options?.disableUnpacking ?? false;
-                let shouldWriteOutput = false;
-                let destForInput = null;
-                let usedCachedOutput = false;
-                if (options?.postProcess?.enabled) {
-                    const relPath = fileEntry.relativePath;
-                    const outputPath = path.join(options.postProcess.outputDir, relPath);
-                    let outputExists = false;
-                    try {
-                        await fs.access(outputPath);
-                        outputExists = true;
-                    }
-                    catch {
-                        // ignore
-                    }
-                    if (outputExists) {
-                        console.log(`Using cached output for ${relPath}`);
-                        code = await fs.readFile(outputPath, 'utf-8');
-                        skipUnpack = true;
-                        usedCachedOutput = true;
-                        const archivePath = path.join(options.postProcess.archiveDir, relPath);
-                        let archiveExists = false;
-                        try {
-                            await fs.access(archivePath);
-                            archiveExists = true;
-                        }
-                        catch {
-                            // ignore
-                        }
-                        if (archiveExists) {
-                            destForInput = path.join(options.postProcess.dupesDir, relPath);
-                        }
-                        else {
-                            destForInput = archivePath;
-                        }
-                    }
-                    else {
-                        code = await fs.readFile(fileEntry.path, 'utf-8');
-                        shouldWriteOutput = true;
-                        destForInput = path.join(options.postProcess.archiveDir, relPath);
+            const concurrency = options?.concurrency ?? 1;
+            const results = await runInBatch(files, concurrency, (file) => this.processFile(file, options));
+            for (const res of results) {
+                warnings.push(...res.warnings);
+                for (const n of res.nodes) {
+                    if (!nodeMap.has(n.id)) {
+                        nodeMap.set(n.id, n);
                     }
                 }
-                else {
-                    code = await fs.readFile(fileEntry.path, 'utf-8');
-                }
-                // Attempt to unpack first
-                let unpackedModules = [];
-                if (!skipUnpack) {
-                    try {
-                        const result = await unpack(code);
-                        if (result)
-                            unpackedModules = result.modules;
+                for (const e of res.edges) {
+                    const key = `${e.source}->${e.target}${e.weak ? ':w' : ''}`;
+                    if (!edgeSet.has(key)) {
+                        edgeSet.add(key);
+                        edges.push(e);
                     }
-                    catch (err) {
-                        console.warn('De-bundling failed, analyzing raw file', err);
-                        warnings.push(`${fileEntry.relativePath}: de-bundling failed, fallback to raw`);
-                    }
-                }
-                // Always create a node for the physical file
-                const fileTags = detectTags(fileEntry.relativePath, code.slice(0, 1000));
-                const fileNodeId = `file:${fileEntry.relativePath}`;
-                addNode(fileNodeId, fileEntry.relativePath, {
-                    moduleId: moduleIdFromPath(fileEntry.relativePath),
-                    file: fileEntry.relativePath,
-                    size: fileEntry.size,
-                    confidence: 'medium',
-                    tags: fileTags,
-                });
-                if (unpackedModules.length > 0) {
-                    // Unpack Success
-                    for (const mod of unpackedModules) {
-                        // Determine tags based on module path AND original file path
-                        const pathStr = mod.path ?? '';
-                        const isVendorFile = fileEntry.relativePath.includes('node_modules') || fileEntry.relativePath.includes('vendor');
-                        const isVendorModule = pathStr.includes('node_modules') || pathStr.startsWith('vendor');
-                        const isVendor = isVendorFile || isVendorModule;
-                        const tags = isVendor ? ['vendor'] : ['source'];
-                        // Prefix node IDs with the bundle name to avoid collisions
-                        // If pathStr is empty, we treat it as the file itself.
-                        const uniquePath = pathStr ? `${fileEntry.relativePath}::${pathStr}` : fileEntry.relativePath;
-                        let moduleCode = mod.code;
-                        if (options?.enabled) {
-                            const shouldHumanify = options.scope === 'all' || tags.includes('source');
-                            if (shouldHumanify) {
-                                try {
-                                    console.log(`Humanifying ${uniquePath}...`);
-                                    moduleCode = await humanifyCode(moduleCode, options);
-                                }
-                                catch (err) {
-                                    console.error(`Humanify failed for ${uniquePath}:`, err);
-                                    warnings.push(`${uniquePath}: humanify failed, using original code`);
-                                }
-                            }
-                        }
-                        this.analyzeModule({
-                            path: uniquePath,
-                            code: moduleCode,
-                            tags,
-                            moduleId: moduleIdFromPath(uniquePath)
-                        }, addNode, addEdge, warnings);
-                    }
-                }
-                else {
-                    // Fallback: Raw analysis
-                    const moduleId = detectModuleIdFromSnippet(code.slice(0, 2000)) ?? moduleIdFromPath(fileEntry.relativePath);
-                    let fileCode = code;
-                    let finalCodeForOutput = code;
-                    if (options?.enabled) {
-                        const shouldHumanify = options.scope === 'all' || fileTags.includes('source');
-                        if (shouldHumanify && !usedCachedOutput) {
-                            try {
-                                console.log(`Humanifying ${fileEntry.relativePath}...`);
-                                fileCode = await humanifyCode(fileCode, options);
-                                finalCodeForOutput = fileCode;
-                            }
-                            catch (err) {
-                                console.error(`Humanify failed for ${fileEntry.relativePath}:`, err);
-                                warnings.push(`${fileEntry.relativePath}: humanify failed, using original code`);
-                            }
-                        }
-                        else if (shouldWriteOutput && !usedCachedOutput) {
-                            // Fallback to beautify if humanification is skipped (e.g. vendor file)
-                            finalCodeForOutput = await beautify(fileCode);
-                            fileCode = finalCodeForOutput;
-                        }
-                    }
-                    else if (shouldWriteOutput) {
-                        // Format with prettier if humanify is disabled but we are archiving
-                        finalCodeForOutput = await beautify(fileCode);
-                        fileCode = finalCodeForOutput;
-                    }
-                    if (shouldWriteOutput && options?.postProcess?.enabled) {
-                        const outputPath = path.join(options.postProcess.outputDir, fileEntry.relativePath);
-                        try {
-                            await fs.mkdir(path.dirname(outputPath), { recursive: true });
-                            await fs.writeFile(outputPath, finalCodeForOutput);
-                        }
-                        catch (err) {
-                            warnings.push(`Failed to write output for ${fileEntry.relativePath}: ${err}`);
-                            destForInput = null; // Prevent move if write failed
-                        }
-                    }
-                    if (destForInput && options?.postProcess?.enabled) {
-                        try {
-                            await fs.mkdir(path.dirname(destForInput), { recursive: true });
-                            await fs.rename(fileEntry.path, destForInput);
-                        }
-                        catch (err) {
-                            warnings.push(`Failed to move input for ${fileEntry.relativePath}: ${err}`);
-                        }
-                    }
-                    this.analyzeModule({
-                        path: fileEntry.relativePath,
-                        code: fileCode,
-                        tags: fileTags,
-                        moduleId
-                    }, addNode, addEdge, warnings, fileNodeId);
                 }
             }
             const payload = {
@@ -290,6 +136,209 @@ export class Analyzer {
             warnings.push(String(error));
             return { success: false, error: String(error), warnings };
         }
+    }
+    async processFile(fileEntry, options) {
+        const warnings = [];
+        const localNodes = [];
+        const localEdges = [];
+        const localNodeMap = new Map();
+        const localEdgeSet = new Set();
+        const addNode = (id, label, meta) => {
+            if (!localNodeMap.has(id)) {
+                const defaultTags = ['source'];
+                const n = {
+                    id,
+                    label,
+                    moduleId: '',
+                    file: '',
+                    confidence: 'medium',
+                    tags: defaultTags,
+                    ...meta,
+                };
+                localNodeMap.set(id, n);
+                localNodes.push(n);
+            }
+        };
+        const addEdge = (source, target, weak = false, confidence = 'medium') => {
+            const key = `${source}->${target}${weak ? ':w' : ''}`;
+            if (localEdgeSet.has(key))
+                return;
+            localEdgeSet.add(key);
+            localEdges.push({ source, target, weak, confidence: weak ? 'low' : confidence });
+        };
+        if (fileEntry.size > MAX_PARSE_BYTES) {
+            warnings.push(`${fileEntry.relativePath} exceeds ${MAX_PARSE_BYTES} bytes; analysis may be partial`);
+        }
+        let code;
+        let skipUnpack = options?.disableUnpacking ?? false;
+        let shouldWriteOutput = false;
+        let destForInput = null;
+        let usedCachedOutput = false;
+        if (options?.postProcess?.enabled) {
+            const relPath = fileEntry.relativePath;
+            const outputPath = path.join(options.postProcess.outputDir, relPath);
+            let outputExists = false;
+            try {
+                await fs.access(outputPath);
+                outputExists = true;
+            }
+            catch {
+                // ignore
+            }
+            if (outputExists) {
+                console.log(`Using cached output for ${relPath}`);
+                code = await fs.readFile(outputPath, 'utf-8');
+                skipUnpack = true;
+                usedCachedOutput = true;
+                const archivePath = path.join(options.postProcess.archiveDir, relPath);
+                let archiveExists = false;
+                try {
+                    await fs.access(archivePath);
+                    archiveExists = true;
+                }
+                catch {
+                    // ignore
+                }
+                if (archiveExists) {
+                    destForInput = path.join(options.postProcess.dupesDir, relPath);
+                }
+                else {
+                    destForInput = archivePath;
+                }
+            }
+            else {
+                code = await fs.readFile(fileEntry.path, 'utf-8');
+                shouldWriteOutput = true;
+                destForInput = path.join(options.postProcess.archiveDir, relPath);
+            }
+        }
+        else {
+            code = await fs.readFile(fileEntry.path, 'utf-8');
+        }
+        // Attempt to unpack first
+        let unpackedModules = [];
+        if (!skipUnpack) {
+            try {
+                const result = await unpack(code);
+                if (result)
+                    unpackedModules = result.modules;
+            }
+            catch (err) {
+                console.warn('De-bundling failed, analyzing raw file', err);
+                warnings.push(`${fileEntry.relativePath}: de-bundling failed, fallback to raw`);
+            }
+        }
+        // Always create a node for the physical file
+        const fileTags = detectTags(fileEntry.relativePath, code.slice(0, 1000));
+        const fileNodeId = `file:${fileEntry.relativePath}`;
+        addNode(fileNodeId, fileEntry.relativePath, {
+            moduleId: moduleIdFromPath(fileEntry.relativePath),
+            file: fileEntry.relativePath,
+            size: fileEntry.size,
+            confidence: 'medium',
+            tags: fileTags,
+        });
+        if (unpackedModules.length > 0) {
+            // Unpack Success
+            for (const mod of unpackedModules) {
+                // Determine tags based on module path AND original file path
+                const pathStr = mod.path ?? '';
+                const isVendorFile = fileEntry.relativePath.includes('node_modules') || fileEntry.relativePath.includes('vendor');
+                const isVendorModule = pathStr.includes('node_modules') || pathStr.startsWith('vendor');
+                const isVendor = isVendorFile || isVendorModule;
+                const tags = isVendor ? ['vendor'] : ['source'];
+                // Prefix node IDs with the bundle name to avoid collisions
+                // If pathStr is empty, we treat it as the file itself.
+                const uniquePath = pathStr ? `${fileEntry.relativePath}::${pathStr}` : fileEntry.relativePath;
+                let moduleCode = mod.code;
+                if (options?.enabled) {
+                    const shouldHumanify = options.scope === 'all' || tags.includes('source');
+                    if (shouldHumanify) {
+                        try {
+                            console.log(`Start Humanifying ${uniquePath}`);
+                            const concurrency = options.concurrency ?? 1;
+                            moduleCode = await humanifyCode(moduleCode, {
+                                ...options,
+                                onProgress: concurrency > 1 ? () => { } : undefined
+                            });
+                            console.log(`Finished Humanifying ${uniquePath}`);
+                        }
+                        catch (err) {
+                            console.error(`Humanify failed for ${uniquePath}:`, err);
+                            warnings.push(`${uniquePath}: humanify failed, using original code`);
+                        }
+                    }
+                }
+                this.analyzeModule({
+                    path: uniquePath,
+                    code: moduleCode,
+                    tags,
+                    moduleId: moduleIdFromPath(uniquePath)
+                }, addNode, addEdge, warnings);
+            }
+        }
+        else {
+            // Fallback: Raw analysis
+            const moduleId = detectModuleIdFromSnippet(code.slice(0, 2000)) ?? moduleIdFromPath(fileEntry.relativePath);
+            let fileCode = code;
+            let finalCodeForOutput = code;
+            if (options?.enabled) {
+                const shouldHumanify = options.scope === 'all' || fileTags.includes('source');
+                if (shouldHumanify && !usedCachedOutput) {
+                    try {
+                        console.log(`Start Humanifying ${fileEntry.relativePath}`);
+                        const concurrency = options.concurrency ?? 1;
+                        fileCode = await humanifyCode(fileCode, {
+                            ...options,
+                            onProgress: concurrency > 1 ? () => { } : undefined
+                        });
+                        console.log(`Finished Humanifying ${fileEntry.relativePath}`);
+                        finalCodeForOutput = fileCode;
+                    }
+                    catch (err) {
+                        console.error(`Humanify failed for ${fileEntry.relativePath}:`, err);
+                        warnings.push(`${fileEntry.relativePath}: humanify failed, using original code`);
+                    }
+                }
+                else if (shouldWriteOutput && !usedCachedOutput) {
+                    // Fallback to beautify if humanification is skipped (e.g. vendor file)
+                    finalCodeForOutput = await beautify(fileCode);
+                    fileCode = finalCodeForOutput;
+                }
+            }
+            else if (shouldWriteOutput) {
+                // Format with prettier if humanify is disabled but we are archiving
+                finalCodeForOutput = await beautify(fileCode);
+                fileCode = finalCodeForOutput;
+            }
+            if (shouldWriteOutput && options?.postProcess?.enabled) {
+                const outputPath = path.join(options.postProcess.outputDir, fileEntry.relativePath);
+                try {
+                    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+                    await fs.writeFile(outputPath, finalCodeForOutput);
+                }
+                catch (err) {
+                    warnings.push(`Failed to write output for ${fileEntry.relativePath}: ${err}`);
+                    destForInput = null; // Prevent move if write failed
+                }
+            }
+            if (destForInput && options?.postProcess?.enabled) {
+                try {
+                    await fs.mkdir(path.dirname(destForInput), { recursive: true });
+                    await fs.rename(fileEntry.path, destForInput);
+                }
+                catch (err) {
+                    warnings.push(`Failed to move input for ${fileEntry.relativePath}: ${err}`);
+                }
+            }
+            this.analyzeModule({
+                path: fileEntry.relativePath,
+                code: fileCode,
+                tags: fileTags,
+                moduleId
+            }, addNode, addEdge, warnings, fileNodeId);
+        }
+        return { nodes: localNodes, edges: localEdges, warnings };
     }
     analyzeModule(ctx, addNode, addEdge, warnings, parentNodeId) {
         const parseResult = this.safeParse(ctx.code);

@@ -129,6 +129,7 @@ describe('Concurrency and Humanify', () => {
         expect(mockHumanifyCode).toHaveBeenCalledWith('function a() {}', expect.objectContaining({ apiKey: 'fake-key' }))
 
         // Check if the node extracted matches the humanified code
+        if (!result.success) throw new Error((result as any).error);
         const humanifiedNode = result.data.nodes.find(n => n.label === 'humanified')
         expect(humanifiedNode).toBeDefined()
     })
@@ -151,6 +152,7 @@ describe('Concurrency and Humanify', () => {
         expect(result.warnings[0]).toContain('humanify failed')
 
         // Should fall back to original code
+        if (!result.success) throw new Error((result as any).error);
         const originalNode = result.data.nodes.find(n => n.label === 'a')
         expect(originalNode).toBeDefined()
     })
@@ -174,6 +176,7 @@ describe('Concurrency and Humanify', () => {
         // wait, local analysis prefixes ids with ctx.path.
         // So a.js::shared and b.js::shared.
 
+        if (!result.success) throw new Error((result as any).error);
         expect(result.data.nodes.length).toBeGreaterThan(0)
         const nodes = result.data.nodes.filter(n => n.label === 'shared')
         expect(nodes.length).toBe(2)

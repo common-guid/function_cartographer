@@ -10,6 +10,7 @@ vi.mock('humanifyjs/lib', () => ({
 }));
 describe('Analyzer with Humanify', () => {
     const mockDir = '/mock/dir';
+    const mockFile = path.join(mockDir, 'test.js');
     const mockCode = 'function a() { return 1; }';
     beforeEach(() => {
         vi.resetAllMocks();
@@ -45,6 +46,7 @@ describe('Analyzer with Humanify', () => {
         expect(humanifyLib.humanifyCode).not.toHaveBeenCalled();
     });
     it('should NOT call humanifyCode for vendor files if scope is source', async () => {
+        const vendorFile = path.join(mockDir, 'node_modules', 'lib.js');
         vi.mocked(fs.readdir).mockResolvedValue([
             { name: 'node_modules', isDirectory: () => true, isFile: () => false }
         ]);
@@ -72,6 +74,7 @@ describe('Analyzer with Humanify', () => {
     it('should call humanifyCode for vendor files if scope is all', async () => {
         // Setup similar to above but with scope 'all'
         const vendorDir = path.join(mockDir, 'node_modules');
+        const vendorFile = path.join(vendorDir, 'lib.js');
         vi.mocked(fs.readdir).mockImplementation(async (dir) => {
             if (dir === mockDir)
                 return [{ name: 'node_modules', isDirectory: () => true, isFile: () => false }];

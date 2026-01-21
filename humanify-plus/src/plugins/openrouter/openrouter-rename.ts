@@ -7,12 +7,14 @@ export function openrouterRename({
   apiKey,
   baseURL,
   model,
-  contextWindowSize
+  contextWindowSize,
+  onProgress
 }: {
   apiKey: string;
   baseURL: string;
   model: string;
   contextWindowSize: number;
+  onProgress?: (percentage: number) => void;
 }) {
   const client = new OpenAI({
     apiKey,
@@ -44,7 +46,7 @@ export function openrouterRename({
         return renamed;
       },
       contextWindowSize,
-      showPercentage
+      onProgress || showPercentage
     );
   };
 }

@@ -12,6 +12,7 @@ export type HumanifyOptions = {
     model?: string;
     contextSize?: number | string;
     verbose?: boolean;
+    onProgress?: (percentage: number) => void;
 };
 
 export async function humanifyCode(code: string, options: HumanifyOptions = {}): Promise<string> {
@@ -23,6 +24,7 @@ export async function humanifyCode(code: string, options: HumanifyOptions = {}):
     const baseURL = options.baseURL ?? "https://openrouter.ai/api/v1";
     const model = options.model ?? "x-ai/grok-4.1-fast";
     const contextWindowSize = parseNumber(options.contextSize ?? DEFAULT_CONTEXT_WINDOW_SIZE);
+    const onProgress = options.onProgress;
 
     if (!apiKey) {
         throw new Error("API Key is required for OpenRouter humanification.");
@@ -34,7 +36,8 @@ export async function humanifyCode(code: string, options: HumanifyOptions = {}):
             apiKey,
             baseURL,
             model,
-            contextWindowSize
+            contextWindowSize,
+            onProgress
         }),
         prettier
     ];
