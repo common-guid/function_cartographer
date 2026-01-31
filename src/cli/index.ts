@@ -40,6 +40,7 @@ program
     const targetDir = path.resolve(process.cwd(), dir)
     console.log(`Analyzing directory: ${targetDir}`)
 
+    const projectRoot = path.resolve(__dirname, '../..')
     const app = express()
     const port = parseInt(options.port, 10)
 
@@ -48,23 +49,44 @@ program
     const analyzer = new Analyzer()
     let cachedResult: any = null
 
-    // Configure Humanify options
-    const humanifyOptions = options.humanify ? {
+    // Configure Analyzer options
+    let analyzerOptions: any = options.humanify ? {
       enabled: true,
       scope: options.humanifyScope,
       apiKey: process.env.HUMANIFY_OPENROUTER_API_KEY,
-      model: process.env.HUMANIFY_PLUS_MODEL
-    } : undefined;
+      model: process.env.HUMANIFY_PLUS_MODEL,
+      concurrency: process.env.HUMANIFY_CONCURRENCY ? parseInt(process.env.HUMANIFY_CONCURRENCY, 10) : 5
+    } : {};
 
-    if (humanifyOptions?.enabled && !humanifyOptions.apiKey) {
+    if (analyzerOptions.enabled && !analyzerOptions.apiKey) {
       console.error('Error: --humanify is enabled but HUMANIFY_OPENROUTER_API_KEY is missing in environment variables or .env file.');
       process.exit(1);
+    }
+
+    // Detect if we are analyzing the sample_js-files directory (or subdirectory)
+    const sampleJsFilesDir = path.join(projectRoot, 'sample_js-files')
+    const relative = path.relative(sampleJsFilesDir, targetDir)
+    const isSampleDir = !relative.startsWith('..') && !path.isAbsolute(relative)
+
+    if (isSampleDir) {
+       console.log('Detected sample_js-files analysis. Enabling post-processing (archiving).')
+       analyzerOptions = {
+           ...analyzerOptions,
+           disableUnpacking: true,
+           postProcess: {
+               enabled: true,
+               inputRoot: targetDir,
+               outputDir: path.join(projectRoot, 'processed/output'),
+               archiveDir: path.join(projectRoot, 'processed/sample_js-files'),
+               dupesDir: path.join(projectRoot, 'processed/dupes')
+           }
+       }
     }
 
     // Run analysis immediately
     try {
       console.log('Starting analysis...')
-      cachedResult = await analyzer.processDirectory(targetDir, humanifyOptions)
+      cachedResult = await analyzer.processDirectory(targetDir, analyzerOptions)
       console.log('Analysis complete.')
     } catch (err) {
       console.error('Analysis failed:', err)
@@ -79,7 +101,6 @@ program
       }
     })
 
-    const projectRoot = path.resolve(__dirname, '../..')
     if (options.buildUi) {
       try {
         await ensureUiBuild(projectRoot)

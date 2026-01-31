@@ -4,6 +4,7 @@ import { unpack } from '@wakaru/unpacker'
 import { humanifyCode, type HumanifyOptions } from 'humanifyjs/lib'
 import fs from 'fs/promises'
 import path from 'path'
+import { beautify } from './beautify.js'
 import type {
   EdgePayload,
   GraphPayload,
@@ -113,9 +114,43 @@ interface ModuleContext {
   moduleId?: string
 }
 
+export interface PostProcessOptions {
+    enabled: boolean
+    inputRoot: string
+    outputDir: string
+    archiveDir: string
+    dupesDir: string
+}
+
 export interface AnalyzerOptions extends HumanifyOptions {
     enabled?: boolean;
     scope?: string;
+    postProcess?: PostProcessOptions;
+    disableUnpacking?: boolean;
+    concurrency?: number;
+}
+
+interface FileResult {
+    nodes: NodePayload[]
+    edges: EdgePayload[]
+    warnings: string[]
+}
+
+async function runInBatch<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = []
+  const executing: Promise<void>[] = []
+  for (const item of items) {
+    const p = Promise.resolve().then(() => fn(item))
+    results.push(p as any)
+    const e: Promise<void> = p.then(() => {
+        executing.splice(executing.indexOf(e), 1)
+    })
+    executing.push(e)
+    if (executing.length >= limit) {
+      await Promise.race(executing)
+    }
+  }
+  return Promise.all(results)
 }
 
 export class Analyzer {
@@ -132,12 +167,49 @@ export class Analyzer {
       const edgeSet = new Set<string>()
       const edges: EdgePayload[] = []
 
-      // Helper to add nodes/edges from anywhere
+      const concurrency = options?.concurrency ?? 1
+
+      const results = await runInBatch(files, concurrency, (file) => this.processFile(file, options))
+
+      for (const res of results) {
+          warnings.push(...res.warnings)
+          for (const n of res.nodes) {
+              if (!nodeMap.has(n.id)) {
+                  nodeMap.set(n.id, n)
+              }
+          }
+          for (const e of res.edges) {
+              const key = `${e.source}->${e.target}${e.weak ? ':w' : ''}`
+              if (!edgeSet.has(key)) {
+                  edgeSet.add(key)
+                  edges.push(e)
+              }
+          }
+      }
+
+      const payload: GraphPayload = {
+        nodes: Array.from(nodeMap.values()),
+        edges,
+      }
+
+      return { success: true, data: payload, warnings }
+    } catch (error) {
+      warnings.push(String(error))
+      return { success: false, error: String(error), warnings }
+    }
+  }
+
+  private async processFile(fileEntry: FileEntry, options?: AnalyzerOptions): Promise<FileResult> {
+      const warnings: string[] = []
+      const localNodes: NodePayload[] = []
+      const localEdges: EdgePayload[] = []
+      const localNodeMap = new Map<string, NodePayload>()
+      const localEdgeSet = new Set<string>()
+
       const addNode = (id: string, label: string, meta: Partial<NodePayload>) => {
-        if (!nodeMap.has(id)) {
-          // Defaults if not provided in meta
+        if (!localNodeMap.has(id)) {
            const defaultTags: NodeType[] = ['source']
-           nodeMap.set(id, {
+           const n: NodePayload = {
              id,
              label,
              moduleId: '',
@@ -145,34 +217,82 @@ export class Analyzer {
              confidence: 'medium',
              tags: defaultTags,
              ...meta,
-           })
+           }
+           localNodeMap.set(id, n)
+           localNodes.push(n)
         }
       }
 
       const addEdge = (source: string, target: string, weak = false, confidence: Confidence = 'medium') => {
         const key = `${source}->${target}${weak ? ':w' : ''}`
-        if (edgeSet.has(key)) return
-        edgeSet.add(key)
-        edges.push({ source, target, weak, confidence: weak ? 'low' : confidence })
+        if (localEdgeSet.has(key)) return
+        localEdgeSet.add(key)
+        localEdges.push({ source, target, weak, confidence: weak ? 'low' : confidence })
       }
 
-      for (const fileEntry of files) {
         if (fileEntry.size > MAX_PARSE_BYTES) {
           warnings.push(
             `${fileEntry.relativePath} exceeds ${MAX_PARSE_BYTES} bytes; analysis may be partial`,
           )
         }
 
-        const code = await fs.readFile(fileEntry.path, 'utf-8')
+        let code: string
+        let skipUnpack = options?.disableUnpacking ?? false
+        let shouldWriteOutput = false
+        let destForInput: string | null = null
+        let usedCachedOutput = false
+
+        if (options?.postProcess?.enabled) {
+            const relPath = fileEntry.relativePath
+            const outputPath = path.join(options.postProcess.outputDir, relPath)
+
+            let outputExists = false
+            try {
+                await fs.access(outputPath)
+                outputExists = true
+            } catch {
+                // ignore
+            }
+
+            if (outputExists) {
+                console.log(`Using cached output for ${relPath}`)
+                code = await fs.readFile(outputPath, 'utf-8')
+                skipUnpack = true
+                usedCachedOutput = true
+
+                const archivePath = path.join(options.postProcess.archiveDir, relPath)
+                let archiveExists = false
+                try {
+                    await fs.access(archivePath)
+                    archiveExists = true
+                } catch {
+                    // ignore
+                }
+
+                if (archiveExists) {
+                    destForInput = path.join(options.postProcess.dupesDir, relPath)
+                } else {
+                    destForInput = archivePath
+                }
+            } else {
+                code = await fs.readFile(fileEntry.path, 'utf-8')
+                shouldWriteOutput = true
+                destForInput = path.join(options.postProcess.archiveDir, relPath)
+            }
+        } else {
+            code = await fs.readFile(fileEntry.path, 'utf-8')
+        }
 
         // Attempt to unpack first
         let unpackedModules: any[] = []
-        try {
-            const result = await unpack(code)
-            if (result) unpackedModules = result.modules
-        } catch (err) {
-            console.warn('De-bundling failed, analyzing raw file', err)
-            warnings.push(`${fileEntry.relativePath}: de-bundling failed, fallback to raw`)
+        if (!skipUnpack) {
+            try {
+                const result = await unpack(code)
+                if (result) unpackedModules = result.modules
+            } catch (err) {
+                console.warn('De-bundling failed, analyzing raw file', err)
+                warnings.push(`${fileEntry.relativePath}: de-bundling failed, fallback to raw`)
+            }
         }
 
         // Always create a node for the physical file
@@ -228,16 +348,47 @@ export class Analyzer {
              const moduleId = detectModuleIdFromSnippet(code.slice(0, 2000)) ?? moduleIdFromPath(fileEntry.relativePath)
 
              let fileCode = code;
+             let finalCodeForOutput = code;
+
              if (options?.enabled) {
                  const shouldHumanify = options.scope === 'all' || fileTags.includes('source');
-                 if (shouldHumanify) {
+                 if (shouldHumanify && !usedCachedOutput) {
                      try {
                          console.log(`Humanifying ${fileEntry.relativePath}...`);
                          fileCode = await humanifyCode(fileCode, options);
+                         finalCodeForOutput = fileCode
                      } catch (err) {
                          console.error(`Humanify failed for ${fileEntry.relativePath}:`, err);
                          warnings.push(`${fileEntry.relativePath}: humanify failed, using original code`);
                      }
+                 } else if (shouldWriteOutput && !usedCachedOutput) {
+                     // Fallback to beautify if humanification is skipped (e.g. vendor file)
+                     finalCodeForOutput = await beautify(fileCode)
+                     fileCode = finalCodeForOutput
+                 }
+             } else if (shouldWriteOutput) {
+                 // Format with prettier if humanify is disabled but we are archiving
+                 finalCodeForOutput = await beautify(fileCode)
+                 fileCode = finalCodeForOutput
+             }
+
+             if (shouldWriteOutput && options?.postProcess?.enabled) {
+                 const outputPath = path.join(options.postProcess.outputDir, fileEntry.relativePath)
+                 try {
+                     await fs.mkdir(path.dirname(outputPath), { recursive: true })
+                     await fs.writeFile(outputPath, finalCodeForOutput)
+                 } catch (err) {
+                     warnings.push(`Failed to write output for ${fileEntry.relativePath}: ${err}`)
+                     destForInput = null // Prevent move if write failed
+                 }
+             }
+
+             if (destForInput && options?.postProcess?.enabled) {
+                 try {
+                     await fs.mkdir(path.dirname(destForInput), { recursive: true })
+                     await fs.rename(fileEntry.path, destForInput)
+                 } catch (err) {
+                     warnings.push(`Failed to move input for ${fileEntry.relativePath}: ${err}`)
                  }
              }
 
@@ -248,18 +399,8 @@ export class Analyzer {
                  moduleId
              }, addNode, addEdge, warnings, fileNodeId)
         }
-      }
 
-      const payload: GraphPayload = {
-        nodes: Array.from(nodeMap.values()),
-        edges,
-      }
-
-      return { success: true, data: payload, warnings }
-    } catch (error) {
-      warnings.push(String(error))
-      return { success: false, error: String(error), warnings }
-    }
+      return { nodes: localNodes, edges: localEdges, warnings }
   }
 
   private analyzeModule(

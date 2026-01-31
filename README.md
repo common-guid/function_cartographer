@@ -23,19 +23,18 @@ A static analysis visualization tool that ingests bundled JavaScript (without so
 ### Install
 ```bash
 npm install
-npm run build      # Builds the frontend
-npm run build:cli  # Builds the CLI
+npm run build      # Builds both the CLI and the Frontend
 ```
 
 ### Analyze a directory
 Run the CLI to analyze a directory containing JavaScript bundles and serve the visualization:
 
 ```bash
-# Run from the project root
-./dist-cli/index.js serve /path/to/your/bundles
+# Run using node from the project root
+node ./dist-cli/cli/index.js serve /path/to/your/bundles
 
-# Or using the npm script shorthand (dev mode)
-npm run dev:cli -- serve /path/to/your/bundles
+# Or using the npm script shorthand (runs built CLI)
+npm run preview -- serve /path/to/your/bundles
 ```
 
 Options:
@@ -51,30 +50,53 @@ To enable humanification, set the OpenRouter API key and pass `--humanify`:
 
 ```bash
 export HUMANIFY_OPENROUTER_API_KEY=your_key
-./dist-cli/index.js serve /path/to/your/bundles --humanify --humanify-scope source
+node ./dist-cli/cli/index.js serve /path/to/your/bundles --humanify --humanify-scope source
 ```
 
-Optional: override the default model with `HUMANIFY_PLUS_MODEL`:
+**Configuration Environment Variables:**
+- `HUMANIFY_OPENROUTER_API_KEY`: Your OpenRouter API key.
+- `HUMANIFY_PLUS_MODEL`: (Optional) Override default model (default: `x-ai/grok-4.1-fast`).
+- `HUMANIFY_CONCURRENCY`: (Optional) Control the number of files processed in parallel (default: `5`).
+
+Example using concurrency control:
 
 ```bash
+export HUMANIFY_CONCURRENCY=10
 export HUMANIFY_OPENROUTER_API_KEY=your_key
 export HUMANIFY_PLUS_MODEL=anthropic/claude-3.5-sonnet
-./dist-cli/index.js serve /path/to/your/bundles --humanify --humanify-scope all
+node ./dist-cli/cli/index.js serve /path/to/your/bundles --humanify --humanify-scope all
 ```
+
+#### Archiving Processed Files
+When running the CLI against the project's `sample_js-files` directory (e.g. `node ./dist-cli/cli/index.js serve sample_js-files`), the tool enables an **archiving mode**:
+- **Output:** Processed (humanified or beautified) files are written to `processed/output/`.
+- **Archive:** Original input files are moved to `processed/sample_js-files/`.
+- **Duplicates:** If a file has already been processed (exists in output), the input file is moved to `processed/dupes/` to avoid reprocessing.
+- **Relative Paths:** The directory structure is preserved in all target directories.
+- **Consistency:** Unpacking is disabled in this mode to ensure the archived file maps 1-to-1 with the input file, allowing consistent re-analysis of the archived output.
 
 ### Development Mode
 
-1. **Start the Frontend Dev Server:**
-   ```bash
-   npm run dev
-   ```
-   This starts Vite at `http://localhost:5173`. It is configured to proxy API requests to `http://localhost:3000`.
+To work on both the frontend and the backend simultaneously:
 
-2. **Start the CLI Server (in a separate terminal):**
+1. **Start the CLI Server (Backend):**
    ```bash
+   # Starts the analysis server on port 3000 using tsx for hot-reloading
    npm run dev:cli -- serve ./sample_js-files/simple -p 3000
    ```
-   This runs the analysis server on port 3000 using `tsx` for hot-reloading backend logic.
+
+2. **Start the Frontend Dev Server:**
+   ```bash
+   # Starts Vite at http://localhost:5173 (proxies API requests to port 3000)
+   npm run dev
+   ```
+
+### Previewing the Production Build
+To test the built application with sample files:
+```bash
+npm run preview
+```
+This runs the built CLI on the `./sample_js-files` directory.
 
 ### Tests
 ```bash
